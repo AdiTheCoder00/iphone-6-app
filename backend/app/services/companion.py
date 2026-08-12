@@ -21,6 +21,12 @@ HISTORY_TURNS = 12
 # making an infinite tool loop structurally impossible.
 MAX_TOOL_CALLS = 2
 
+# The prompt asks for about 200 characters, but a slightly larger hard ceiling
+# leaves room for a natural two-sentence reply while still bounding text from a
+# misconfigured or non-compliant local model.  It also matches /speak's input
+# limit, so every chat response remains safe to send to TTS.
+MAX_REPLY_CHARS = 600
+
 SYSTEM_PROMPT = """You are a warm, familiar companion living on a small phone screen on someone's desk. You are not a search engine and not a corporate assistant.
 
 How you speak:
@@ -155,6 +161,17 @@ def _normalize_emotion(value: object) -> str:
     return key if key in EMOTIONS else "idle"
 
 
+def _normalize_reply(value: object) -> str:
+    """Return one compact, UI-safe line from untrusted model output."""
+    if not isinstance(value, str):
+        return ""
+    # A reply is shown in a small speech bubble and sent directly to TTS; line
+    # breaks and huge whitespace runs provide neither UI nor conversational
+    # value here.
+    reply = re.sub(r"\s+", " ", value).strip()
+    return reply[:MAX_REPLY_CHARS].rstrip()
+
+
 def parse_model_output(raw: str) -> tuple[str, str]:
     """Turn a raw completion into (reply, emotion).
 
@@ -165,14 +182,13 @@ def parse_model_output(raw: str) -> tuple[str, str]:
     payload = _extract_json_object(cleaned)
     if payload is None:
         logger.info("Model did not return JSON; using raw text as the reply")
-        return cleaned, "idle"
+        return _normalize_reply(cleaned), "idle"
 
-    reply = payload.get("reply")
-    reply = reply.strip() if isinstance(reply, str) else ""
+    reply = _normalize_reply(payload.get("reply"))
     if not reply:
         # Valid JSON, empty/missing reply — the cleaned text is still better
         # than nothing only if it isn't just the JSON envelope itself.
-        reply = "" if payload else cleaned
+        reply = "" if payload else _normalize_reply(cleaned)
     return reply, _normalize_emotion(payload.get("emotion"))
 
 
@@ -198,6 +214,13 @@ class CompanionService:
 
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
+        # Startup schedules a one-token prewarm. Until it completes, the UI
+        # can explain a short first-load wait instead of looking disconnected.
+        self._model_status = "warming"
+
+    @property
+    def model_status(self) -> str:
+        return self._model_status
 
     def _get_client(self) -> httpx.AsyncClient:
         # Created lazily so importing the module never opens a connection pool,
@@ -272,18 +295,40 @@ class CompanionService:
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as e:
+            self._model_status = "unavailable"
             logger.error(
                 "Ollama returned %s: %s", e.response.status_code, e.response.text[:500]
             )
             raise CompanionUnavailable("Ollama rejected the request") from e
         except httpx.HTTPError as e:
+            self._model_status = "unavailable"
             logger.error("Ollama unreachable at %s: %s", settings.ollama_base_url, e)
             raise CompanionUnavailable("Ollama is unreachable") from e
         except json.JSONDecodeError as e:
+            self._model_status = "unavailable"
             logger.error("Ollama returned a non-JSON envelope")
             raise CompanionUnavailable("Ollama returned an unreadable response") from e
 
-        return (data.get("message") or {}).get("content") or ""
+        # A successful HTTP response is not enough: a proxy, a different API
+        # version, or a malformed local server can still return JSON in an
+        # unexpected shape. Keep that implementation detail from escaping as
+        # an AttributeError and turning into a generic 500 at the route.
+        if not isinstance(data, dict):
+            self._model_status = "unavailable"
+            logger.error("Ollama returned a non-object response envelope")
+            raise CompanionUnavailable("Ollama returned an unreadable response")
+        message = data.get("message")
+        if not isinstance(message, dict):
+            self._model_status = "unavailable"
+            logger.error("Ollama response did not contain a message object")
+            raise CompanionUnavailable("Ollama returned an unreadable response")
+        content = message.get("content")
+        if not isinstance(content, str):
+            self._model_status = "unavailable"
+            logger.error("Ollama response did not contain text content")
+            raise CompanionUnavailable("Ollama returned an unreadable response")
+        self._model_status = "ready"
+        return content
 
     async def chat(self, message: str, history: list[ChatMessage]) -> dict:
         """Return {"reply": str, "emotion": str}.
@@ -345,9 +390,11 @@ class CompanionService:
         stop the server from coming up.
         """
         if not settings.llm_prewarm_enabled:
+            self._model_status = "ready"
             return
+        self._model_status = "warming"
         try:
-            await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 self._get_client().post(
                     "/api/chat",
                     json={
@@ -360,10 +407,14 @@ class CompanionService:
                 ),
                 timeout=settings.llm_prewarm_timeout,
             )
+            response.raise_for_status()
+            self._model_status = "ready"
             logger.info("LLM prewarmed (%s, keep_alive=%s)", settings.ollama_model, settings.ollama_keep_alive)
         except asyncio.TimeoutError:
+            self._model_status = "unavailable"
             logger.warning("LLM prewarm timed out after %.0fs", settings.llm_prewarm_timeout)
         except Exception as e:
+            self._model_status = "unavailable"
             logger.info("LLM prewarm skipped: %s", e)
 
     async def improvise(self, instruction: str) -> dict:
@@ -391,8 +442,14 @@ class CompanionService:
         """Cheap liveness probe for /health. Never raises."""
         try:
             response = await self._get_client().get("/api/tags", timeout=3.0)
-            return response.status_code == 200
+            available = response.status_code == 200
+            if not available:
+                self._model_status = "unavailable"
+            elif self._model_status != "warming":
+                self._model_status = "ready"
+            return available
         except httpx.HTTPError:
+            self._model_status = "unavailable"
             return False
 
 

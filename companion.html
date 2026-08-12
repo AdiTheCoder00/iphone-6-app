@@ -413,6 +413,26 @@ html, body {
 }
 .bubble[data-visible="true"] { opacity: 1; transform: translateY(0); }
 .bubble[data-error="true"] { border-color: rgba(224, 122, 122, 0.35); color: #e6c7c7; }
+.bubble[data-actions="true"] { pointer-events: auto; }
+.bubble__actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.bubble__action {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 16px;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: #dff7fa;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.bubble__action:disabled { opacity: 0.5; cursor: wait; }
+.bubble__action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* With the composer up the bubble would sit under the input, so it moves
    above it and gives back the height. */
@@ -611,7 +631,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   pointer-events: none;
   transition: opacity 300ms ease;
 }
-.retry[data-visible="true"] { opacity: 1; }
+.retry[data-visible="true"] { opacity: 1; pointer-events: auto; }
 .retry__dot {
   width: 6px;
   height: 6px;
@@ -620,6 +640,19 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   animation: retryPulse 1.6s ease-in-out infinite;
 }
 @keyframes retryPulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.retry__connect {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(83, 213, 229, 0.48);
+  border-radius: 16px;
+  background: rgba(21, 53, 62, 0.68);
+  color: #9debf3;
+  font: inherit;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.retry__connect:active { background: rgba(39, 98, 111, 0.84); }
+.retry__connect:focus-visible { outline: 2px solid #57d8e8; outline-offset: 2px; }
 
 .settings {
   position: absolute;
@@ -853,7 +886,9 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   </div>
 
   <!-- ---------------------------------------------------------------- CHAT -->
-  <div class="bubble" id="bubble" data-visible="false" role="status" aria-live="polite"></div>
+  <!-- A region supports the reminder action buttons; a `status` role must not
+       contain interactive controls. aria-live still announces new messages. -->
+  <div class="bubble" id="bubble" data-visible="false" role="region" aria-label="Companion message" aria-live="polite"></div>
 
   <form class="composer" id="composer" data-open="false" autocomplete="off">
     <input class="composer__input" id="composerInput" type="text" placeholder="Say something…"
@@ -863,6 +898,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 
   <div class="retry" id="retry" data-visible="false" role="status">
     <span class="retry__dot"></span><span id="retryText">can’t reach the backend</span>
+    <button class="retry__connect" id="connectBackend" type="button">Connect</button>
   </div>
 
   <div class="dock" id="dock">
@@ -980,6 +1016,7 @@ window.CompanionConfig = (function () {
   'use strict';
 
   var KEY = 'companion.settings.v1';
+  var DEFAULT_REQUEST_TIMEOUT_MS = 15000;
   var DEFAULTS = {
     backendUrl: 'http://localhost:8000',
     dim: 0,
@@ -1032,9 +1069,38 @@ window.CompanionConfig = (function () {
   /* Trailing slashes would produce '…//chat'. */
   function backendUrl() { return String(state.backendUrl).replace(/\/+$/, ''); }
 
+  /* fetch() has no timeout of its own. On a phone moving between Wi-Fi and
+     cellular, a half-open connection can otherwise leave the face waiting
+     forever and stop the health retry loop. All backend requests share this
+     small wrapper; callers can extend it for model or transcription work. */
+  function request(path, options, timeoutMs) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var requestOptions = {};
+    var key;
+    if (options) {
+      for (key in options) {
+        if (Object.prototype.hasOwnProperty.call(options, key)) requestOptions[key] = options[key];
+      }
+    }
+    if (controller) requestOptions.signal = controller.signal;
+
+    var timer = controller ? setTimeout(function () { controller.abort(); },
+      typeof timeoutMs === 'number' ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS) : null;
+    return fetch(backendUrl() + path, requestOptions).then(
+      function (response) {
+        if (timer !== null) clearTimeout(timer);
+        return response;
+      },
+      function (error) {
+        if (timer !== null) clearTimeout(timer);
+        throw error;
+      }
+    );
+  }
+
   function onChange(fn) { listeners.push(fn); }
 
-  return { get: get, set: set, backendUrl: backendUrl, onChange: onChange };
+  return { get: get, set: set, backendUrl: backendUrl, request: request, onChange: onChange };
 })();
 
 
@@ -1364,6 +1430,8 @@ window.Companion = (function () {
 window.CompanionSpeech = (function () {
   'use strict';
 
+  var SPEAK_REQUEST_TIMEOUT_MS = 90000;
+
   var audio = new Audio();
   audio.preload = 'auto';
 
@@ -1452,11 +1520,11 @@ window.CompanionSpeech = (function () {
     cancel();                                  // a new reply supersedes an old one
 
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/speak', {
+      var res = await window.CompanionConfig.request('/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text })
-      });
+      }, SPEAK_REQUEST_TIMEOUT_MS);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var blob = await res.blob();
 
@@ -1491,6 +1559,7 @@ window.CompanionChat = (function () {
   var BUBBLE_MAX_MS = 7000;
   var ERROR_TEXT = 'having trouble thinking right now';
   var SSE_RETRY_MS = 3000;       // reconnect delay after a dropped stream
+  var CHAT_REQUEST_TIMEOUT_MS = 75000;
 
   var toggle = document.getElementById('chatToggle');
   var composer = document.getElementById('composer');
@@ -1530,20 +1599,65 @@ window.CompanionChat = (function () {
     input.blur();
   }
 
-  function showBubble(text, isError) {
+  function showBubble(text, isError, actions) {
     if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
     var myBubble = ++bubbleId;
     bubble.textContent = text;
     bubble.setAttribute('data-error', isError ? 'true' : 'false');
+    bubble.setAttribute('data-actions', actions ? 'true' : 'false');
+    if (actions) {
+      var actionRow = document.createElement('div');
+      actionRow.className = 'bubble__actions';
+      actions.forEach(function (action) {
+        var button = document.createElement('button');
+        button.className = 'bubble__action';
+        button.type = 'button';
+        button.textContent = action.label;
+        button.addEventListener('click', function () { action.run(actionRow); });
+        actionRow.appendChild(button);
+      });
+      bubble.appendChild(actionRow);
+    }
     bubble.setAttribute('data-visible', 'true');
 
-    var hold = Math.min(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS);
+    var hold = actions ? BUBBLE_MAX_MS : Math.min(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS);
     bubbleTimer = setTimeout(function () {
       bubbleTimer = null;
       if (myBubble !== bubbleId) return;     // a newer bubble already took over
       bubble.setAttribute('data-visible', 'false');
       window.Companion.setEmotion('idle');
     }, hold);
+  }
+
+  function showReminder(text, reminderId) {
+    function done() {
+      if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+      ++bubbleId;
+      window.CompanionSpeech.cancel();
+      bubble.setAttribute('data-visible', 'false');
+      bubble.setAttribute('data-actions', 'false');
+      window.Companion.setEmotion('idle');
+    }
+    async function snooze(row) {
+      var buttons = row.querySelectorAll('button');
+      for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+      window.CompanionSpeech.cancel();
+      try {
+        var res = await window.CompanionConfig.request('/reminders/' + encodeURIComponent(reminderId) + '/snooze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ minutes: 10 })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        showBubble('okay — I’ll remind you again in 10 minutes', false);
+      } catch (e) {
+        showBubble('could not snooze that reminder', true);
+      }
+    }
+    showBubble(text, false, [
+      { label: 'Done', run: done },
+      { label: 'Snooze 10 min', run: snooze }
+    ]);
   }
 
   function setBusy(busy) {
@@ -1562,21 +1676,27 @@ window.CompanionChat = (function () {
 
     setBusy(true);
     window.Companion.setEmotion('listen');
+    var requestBackend = window.CompanionConfig.backendUrl();
     var thinkTimer = setTimeout(function () {
       if (mySend === sendId) window.Companion.setEmotion('think');
     }, THINK_AFTER_MS);
 
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/chat', {
+      var res = await window.CompanionConfig.request('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, history: conversation.slice(0, -1) })
-      });
+      }, CHAT_REQUEST_TIMEOUT_MS);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
 
       clearTimeout(thinkTimer);
       if (mySend !== sendId) return;         // superseded while in flight
+      if (requestBackend !== window.CompanionConfig.backendUrl()) {
+        /* Never render a reply from a backend the user has just replaced. */
+        conversation.pop();
+        return;
+      }
 
       conversation.push({ role: 'assistant', content: data.reply });
       window.Companion.setEmotion(data.emotion || 'idle');
@@ -1643,7 +1763,8 @@ window.CompanionChat = (function () {
         /* A fired reminder and an unprompted line render identically — both
            are the companion speaking without being asked. */
         window.Companion.setEmotion(event.emotion || 'happy');
-        showBubble(event.text, false);
+        if (event.type === 'reminder' && typeof event.id === 'number') showReminder(event.text, event.id);
+        else showBubble(event.text, false);
         window.CompanionSpeech.speak(event.text);
 
       } else if (event.type === 'wake') {
@@ -1673,7 +1794,7 @@ window.CompanionChat = (function () {
      something while this was in flight, that turn wins. */
   async function loadHistory() {
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/conversation');
+      var res = await window.CompanionConfig.request('/conversation');
       if (!res.ok) return;
       var data = await res.json();
       if (conversation.length === 0 && Array.isArray(data.messages) && data.messages.length) {
@@ -1689,7 +1810,7 @@ window.CompanionChat = (function () {
   async function clearHistory() {
     conversation = [];
     try {
-      await fetch(window.CompanionConfig.backendUrl() + '/conversation', { method: 'DELETE' });
+      await window.CompanionConfig.request('/conversation', { method: 'DELETE' });
     } catch (e) {
       console.warn('[Companion] could not clear stored history:', e);
     }
@@ -1764,8 +1885,8 @@ window.CompanionGlance = (function () {
     var city = window.CompanionConfig.get('city');
     if (!city) { weather = ''; drawClock(); return; }
     try {
-      var res = await fetch(
-        window.CompanionConfig.backendUrl() + '/ambient?city=' + encodeURIComponent(city)
+      var res = await window.CompanionConfig.request(
+        '/ambient?city=' + encodeURIComponent(city)
       );
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
@@ -1806,12 +1927,14 @@ window.CompanionGlance = (function () {
   'use strict';
 
   var HEALTH_RETRY_MS = 5000;
+  var HEALTH_REQUEST_TIMEOUT_MS = 5000;
   var LONG_PRESS_MS = 600;
   var LONG_PRESS_SLOP_PX = 12;
 
   var stage = document.getElementById('stage');
   var dim = document.getElementById('dim');
   var retry = document.getElementById('retry');
+  var connectBackendBtn = document.getElementById('connectBackend');
   var settings = document.getElementById('settings');
   var sheet = document.getElementById('settingsSheet');
   var backendInput = document.getElementById('setBackend');
@@ -1934,6 +2057,11 @@ window.CompanionGlance = (function () {
     window.CompanionConfig.set('backendUrl', value);
     checkHealth();                            // re-probe the new target at once
   });
+  backendInput.addEventListener('keydown', function (e) {
+    /* On iOS, “Done” should save the address instead of leaving a hidden
+       change event pending until the next tap. */
+    if (e.key === 'Enter') backendInput.blur();
+  });
 
   /* --- weather city ------------------------------------------------------- */
   var cityInput = document.getElementById('setCity');
@@ -1998,12 +2126,12 @@ window.CompanionGlance = (function () {
 
   async function loadReminders() {
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/reminders');
+      var res = await window.CompanionConfig.request('/reminders');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       renderRows(remindersList, remindersCount, data.reminders, 'Nothing scheduled.', function (r) {
         return makeRow(r.text, formatWhen(r.fire_time), async function () {
-          await fetch(window.CompanionConfig.backendUrl() + '/reminders/' + r.id, { method: 'DELETE' });
+          await window.CompanionConfig.request('/reminders/' + r.id, { method: 'DELETE' });
           loadReminders();
         });
       });
@@ -2014,12 +2142,12 @@ window.CompanionGlance = (function () {
 
   async function loadFacts() {
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/facts');
+      var res = await window.CompanionConfig.request('/facts');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       renderRows(factsList, factsCount, data.facts, 'Nothing remembered yet.', function (f) {
         return makeRow(f.text, '', async function () {
-          await fetch(window.CompanionConfig.backendUrl() + '/facts/' + f.id, { method: 'DELETE' });
+          await window.CompanionConfig.request('/facts/' + f.id, { method: 'DELETE' });
           loadFacts();
         });
       });
@@ -2029,7 +2157,7 @@ window.CompanionGlance = (function () {
   }
 
   /* --- settings open/close ------------------------------------------------ */
-  function openSettings() {
+  function openSettings(focusBackend) {
     settings.setAttribute('data-open', 'true');
     backendInput.value = window.CompanionConfig.get('backendUrl');
     cityInput.value = window.CompanionConfig.get('city');
@@ -2038,6 +2166,11 @@ window.CompanionGlance = (function () {
        and polling it would be pure background traffic. */
     loadReminders();
     loadFacts();
+    if (focusBackend) {
+      /* Wait for the sheet transition to make this feel like a deliberate
+         setup step, then bring up the URL keyboard. */
+      setTimeout(function () { backendInput.focus(); }, 180);
+    }
   }
   function closeSettings() {
     settings.setAttribute('data-open', 'false');
@@ -2047,6 +2180,14 @@ window.CompanionGlance = (function () {
   /* Tap outside the sheet dismisses. */
   settings.addEventListener('click', function (e) {
     if (!sheet.contains(e.target)) closeSettings();
+  });
+
+  /* The unreachable state is a setup path, not merely a warning. This keeps
+     first-use configuration discoverable without changing the quiet idle UI. */
+  var retryAction = 'connect';
+  connectBackendBtn.addEventListener('click', function () {
+    if (retryAction === 'retry') checkHealth();
+    else openSettings(true);
   });
 
   /* --- long-press anywhere to reveal settings -----------------------------
@@ -2141,22 +2282,31 @@ window.CompanionGlance = (function () {
   var healthTimer = null;
   var healthy = null;                          // null = not yet determined
 
-  function showRetry(visible, text) {
+  function showRetry(visible, text, action) {
     retry.setAttribute('data-visible', visible ? 'true' : 'false');
     if (text) document.getElementById('retryText').textContent = text;
+    retryAction = action || 'connect';
+    connectBackendBtn.hidden = retryAction === 'wait';
+    connectBackendBtn.textContent = retryAction === 'retry' ? 'Retry' : 'Connect';
   }
 
   async function checkHealth() {
     if (healthTimer !== null) { clearTimeout(healthTimer); healthTimer = null; }
-    var ok = false;
+    var requestBackend = window.CompanionConfig.backendUrl();
+    var health = null;
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/health', { cache: 'no-store' });
-      ok = res.ok;
+      var res = await window.CompanionConfig.request(
+        '/health', { cache: 'no-store' }, HEALTH_REQUEST_TIMEOUT_MS
+      );
+      if (res.ok) health = await res.json();
     } catch (e) {
-      ok = false;
+      health = null;
     }
 
-    if (ok) {
+    /* A delayed health result for the old URL must not affect a new target. */
+    if (requestBackend !== window.CompanionConfig.backendUrl()) return;
+
+    if (health && health.ollama_connected && health.model_status === 'ready') {
       if (healthy !== true) {
         showRetry(false);
         /* Don't stomp sleep mode just because the backend came back. */
@@ -2166,8 +2316,23 @@ window.CompanionGlance = (function () {
       return;
     }
 
+    if (health && health.ollama_connected && health.model_status === 'warming') {
+      showRetry(true, 'warming up the companion', 'wait');
+      healthy = null;
+      healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+      return;
+    }
+
+    if (health) {
+      showRetry(true, 'server ready · model unavailable', 'retry');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
+      healthy = false;
+      healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+      return;
+    }
+
     if (healthy !== false) {
-      showRetry(true, 'can’t reach the backend');
+      showRetry(true, 'can’t reach the backend', 'connect');
       if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
     }
     healthy = false;
@@ -2243,6 +2408,7 @@ window.CompanionVoice = (function () {
      giving up on silence would feel broken — a spoken command fits in six
      seconds, and the 15s ceiling still applies as the outer bound. */
   var AUTO_RECORD_MS = 6000;
+  var TRANSCRIBE_REQUEST_TIMEOUT_MS = 75000;
 
   var micBtn = document.getElementById('micBtn');
   var micPrompt = document.getElementById('micPrompt');
@@ -2421,10 +2587,10 @@ window.CompanionVoice = (function () {
 
     var text = '';
     try {
-      var res = await fetch(window.CompanionConfig.backendUrl() + '/transcribe', {
+      var res = await window.CompanionConfig.request('/transcribe', {
         method: 'POST',
         body: form
-      });
+      }, TRANSCRIBE_REQUEST_TIMEOUT_MS);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       text = (data.text || '').trim();

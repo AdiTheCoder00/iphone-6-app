@@ -48,6 +48,13 @@ class ReminderService:
             logger.info("Reminder %d cancelled", reminder_id)
         return cancelled
 
+    def snooze(self, reminder_id: int, minutes: int) -> dict | None:
+        fire_time = time.time() + timedelta(minutes=minutes).total_seconds()
+        reminder = store.snooze_fired_reminder(reminder_id, fire_time)
+        if reminder:
+            logger.info("Reminder %d snoozed for %d minute(s)", reminder_id, minutes)
+        return reminder
+
     def find_pending(self, text: str) -> list[dict]:
         """Pending reminders whose text loosely matches `text`.
 
@@ -99,7 +106,12 @@ class ReminderService:
             if not store.mark_fired(reminder["id"]):
                 continue
             event_hub.publish(
-                {"type": "reminder", "text": reminder["text"], "emotion": "happy"}
+                {
+                    "type": "reminder",
+                    "id": reminder["id"],
+                    "text": reminder["text"],
+                    "emotion": "happy",
+                }
             )
             logger.info("Reminder %d fired: %s", reminder["id"], reminder["text"])
             fired.append(reminder)

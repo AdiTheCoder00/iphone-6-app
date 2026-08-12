@@ -117,6 +117,28 @@ class Store:
             conn.commit()
         return cur.rowcount > 0
 
+    def snooze_fired_reminder(self, reminder_id: int, fire_time: float) -> dict | None:
+        """Reactivate a delivered reminder at a later time.
+
+        The fired predicate makes a snooze a one-time action: two devices
+        receiving the same SSE event cannot both move the reminder.
+        """
+        conn = self._require()
+        with self._lock:
+            row = conn.execute(
+                "SELECT id, text FROM reminders WHERE id = ? AND fired = 1", (reminder_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            cur = conn.execute(
+                "UPDATE reminders SET fire_time = ?, fired = 0 WHERE id = ? AND fired = 1",
+                (fire_time, reminder_id),
+            )
+            conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return {"id": row["id"], "text": row["text"], "fire_time": fire_time}
+
     def pending_reminders(self) -> list[dict]:
         conn = self._require()
         with self._lock:
@@ -191,6 +213,16 @@ class Store:
             conn.execute(
                 "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
                 (role, content, time.time()),
+            )
+            # A recent transcript gives the companion continuity, but retaining
+            # every turn forever makes a desk device's database grow without a
+            # bound.  Honour a larger replay setting if the user configured one.
+            keep = max(settings.conversation_store_limit, settings.history_replay_limit)
+            conn.execute(
+                "DELETE FROM messages WHERE id NOT IN ("
+                "SELECT id FROM messages ORDER BY id DESC LIMIT ?"
+                ")",
+                (keep,),
             )
             conn.commit()
 

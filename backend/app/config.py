@@ -77,7 +77,15 @@ class Settings(BaseSettings):
     # Persistence. One SQLite file for reminders and conversation history.
     db_path: str = Field("data/companion.db", validation_alias="DB_PATH")
     # How many past messages to replay into a fresh page load.
-    history_replay_limit: int = Field(20, validation_alias="HISTORY_REPLAY_LIMIT")
+    history_replay_limit: int = Field(
+        20, ge=1, le=200, validation_alias="HISTORY_REPLAY_LIMIT"
+    )
+    # The current conversation is useful; an unbounded lifelong transcript is
+    # not.  Keep a generous rolling window so the SQLite file cannot grow
+    # forever on a desk device that stays up for months.
+    conversation_store_limit: int = Field(
+        500, ge=20, le=10_000, validation_alias="CONVERSATION_STORE_LIMIT"
+    )
 
     # Proactive presence — the companion speaking first.
     proactive_enabled: bool = Field(True, validation_alias="PROACTIVE_ENABLED")

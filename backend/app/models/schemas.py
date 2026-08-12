@@ -38,7 +38,10 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    reply: str
+    # The service normalises model output to this ceiling.  Keeping the API
+    # contract bounded protects the small on-device bubble if a local model
+    # ignores its prompt and emits a long completion.
+    reply: str = Field(..., min_length=1, max_length=600)
     emotion: Emotion
 
 
@@ -67,6 +70,12 @@ class ReminderOut(BaseModel):
     text: str
     # Epoch seconds; the frontend formats it in the device's own timezone.
     fire_time: float
+
+
+class SnoozeReminderRequest(BaseModel):
+    # A quick action should be useful without turning the notification into a
+    # scheduling UI. The API still accepts longer intentional snoozes.
+    minutes: int = Field(..., ge=1, le=1440)
 
 
 class RemindersResponse(BaseModel):
@@ -109,4 +118,7 @@ class HealthResponse(BaseModel):
     status: str
     ollama_connected: bool
     model: str
+    # Distinguishes an API that is reachable but still warming its local model
+    # from one that is actually ready to answer.
+    model_status: Literal["warming", "ready", "unavailable"]
     tts_enabled: bool = False

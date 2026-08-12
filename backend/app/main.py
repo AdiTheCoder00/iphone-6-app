@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 # Route ALL TLS verification through the OS trust store, before anything that
 # opens a connection is imported. services/tools.py builds its own context for
@@ -14,7 +14,7 @@ import truststore
 
 truststore.inject_into_ssl()
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
@@ -30,6 +30,7 @@ from app.models.schemas import (
     HealthResponse,
     ReminderOut,
     RemindersResponse,
+    SnoozeReminderRequest,
     SpeakRequest,
     TranscribeResponse,
     WakeRequest,
@@ -83,6 +84,11 @@ async def lifespan(app: FastAPI):
     yield
 
     prewarm_task.cancel()
+    # Give the cancelled prewarm request a chance to release its HTTP resources
+    # before the shared client is closed below.  Awaiting it also prevents a
+    # pending-task warning during a fast server restart.
+    with suppress(asyncio.CancelledError):
+        await prewarm_task
     await proactive_service.stop()
     await reminder_service.stop()
     await companion_service.aclose()
@@ -114,6 +120,7 @@ async def health_check():
         status="ok",
         ollama_connected=await companion_service.is_available(),
         model=settings.ollama_model,
+        model_status=companion_service.model_status,
         tts_enabled=settings.tts_enabled,
     )
 
@@ -158,6 +165,15 @@ async def cancel_reminder(reminder_id: int):
     return {"cancelled": reminder_id}
 
 
+@app.post("/reminders/{reminder_id}/snooze", response_model=ReminderOut)
+async def snooze_reminder(reminder_id: int, body: SnoozeReminderRequest):
+    """Snooze an already-delivered reminder from its notification bubble."""
+    reminder = await asyncio.to_thread(reminder_service.snooze, reminder_id, body.minutes)
+    if reminder is None:
+        raise HTTPException(status_code=409, detail="Reminder has already been handled")
+    return ReminderOut(**reminder)
+
+
 @app.get("/facts", response_model=FactsResponse)
 async def list_facts():
     """What the companion durably knows. Visible on purpose — memory the user
@@ -184,17 +200,36 @@ async def clear_facts():
 # hitting Open-Meteo on each request. Weather does not move fast enough for a
 # shorter window to tell anyone anything new.
 _AMBIENT_TTL_SECONDS = 600.0
+MAX_AMBIENT_CACHE_ENTRIES = 100
 _ambient_cache: dict[str, tuple[float, str]] = {}
 
 
+def _cache_ambient(city: str, summary: str, now: float) -> None:
+    """Store a compact weather result without allowing arbitrary city input to
+    grow this long-lived process cache forever."""
+    expired = [key for key, (saved_at, _) in _ambient_cache.items()
+               if now - saved_at >= _AMBIENT_TTL_SECONDS]
+    for key in expired:
+        _ambient_cache.pop(key, None)
+
+    # Dicts preserve insertion order, so the first entry is the least recently
+    # added cache value.  A bounded cache is enough here: weather is only an
+    # ambient convenience and a later request can always refresh an evicted city.
+    while len(_ambient_cache) >= MAX_AMBIENT_CACHE_ENTRIES and city not in _ambient_cache:
+        _ambient_cache.pop(next(iter(_ambient_cache)))
+    _ambient_cache[city] = (now, summary)
+
+
 @app.get("/ambient", response_model=AmbientResponse)
-async def ambient(city: str = ""):
+async def ambient(city: str = Query("", max_length=100)):
     city = city.strip()
     if not city:
         return AmbientResponse(weather=None)
 
-    cached = _ambient_cache.get(city.lower())
-    if cached and time.monotonic() - cached[0] < _AMBIENT_TTL_SECONDS:
+    cache_key = city.casefold()
+    now = time.monotonic()
+    cached = _ambient_cache.get(cache_key)
+    if cached and now - cached[0] < _AMBIENT_TTL_SECONDS:
         return AmbientResponse(weather=cached[1])
 
     try:
@@ -204,7 +239,7 @@ async def ambient(city: str = ""):
         logger.info("Ambient weather unavailable for %r: %s", city, e)
         return AmbientResponse(weather=None)
 
-    _ambient_cache[city.lower()] = (time.monotonic(), summary)
+    _cache_ambient(cache_key, summary, now)
     return AmbientResponse(weather=summary)
 
 

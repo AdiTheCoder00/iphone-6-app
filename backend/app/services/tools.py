@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Weather lookups are a user-visible latency cost on every call, so they get a
 # much tighter budget than the LLM itself.
 WEATHER_TIMEOUT = 8.0
+MAX_REMINDER_CHARS = 300
 
 # Verify against the OS trust store rather than certifi's bundle.
 #
@@ -240,6 +241,11 @@ def _set_reminder(text: str, minutes_from_now: int) -> str:
     text = (text or "").strip()
     if not text:
         return "ERROR: set_reminder needs the reminder text"
+    if len(text) > MAX_REMINDER_CHARS:
+        return (
+            f"ERROR: reminder text is too long ({len(text)} > {MAX_REMINDER_CHARS} chars); "
+            "summarise it in one short sentence"
+        )
     try:
         minutes = int(minutes_from_now)
     except (TypeError, ValueError):
