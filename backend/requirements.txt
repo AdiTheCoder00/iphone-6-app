@@ -1,0 +1,36 @@
+# Pinned with an upper bound so a transitive release cannot silently change a
+# rebuild, matching the guru-rag-app convention. Refresh deliberately: bump a
+# bound, reinstall, re-run the endpoint.
+fastapi>=0.141,<0.142
+uvicorn[standard]>=0.52,<0.53
+pydantic>=2.13,<3
+pydantic-settings>=2.14,<3
+python-dotenv>=1.2,<2
+
+# Ollama is called over its own HTTP API rather than through
+# llama-index-llms-ollama. guru-rag-app needs LlamaIndex because it wires the
+# LLM into retrievers, synthesizers and a vector store; this app makes one
+# chat call, so the wrapper would pull ~40 packages to save ~20 lines. Same
+# Ollama server, same OLLAMA_BASE_URL/OLLAMA_MODEL settings.
+httpx>=0.28,<0.29
+
+# Verify TLS against the OS trust store. Needed because api.open-meteo.com
+# serves an incomplete chain that OpenSSL/certifi cannot complete (no AIA
+# fetching) — see services/tools.py.
+truststore>=0.10,<0.11
+
+# Tap-to-talk speech-to-text. Same engine as guru-rag-app. Decoding is handled
+# by PyAV (pulled in by faster-whisper), which reads the MP4/AAC that iOS
+# Safari's MediaRecorder emits as well as WebM/Opus from everything else.
+# Model weights download on first use into the HuggingFace cache.
+faster-whisper>=1.2.1,<2
+
+# multipart/form-data parsing for the audio upload on POST /transcribe.
+python-multipart>=0.0.32,<0.1
+
+# Text-to-speech. Local neural voice on CPU, same engine as guru-rag-app's
+# read-aloud. Model files (~350 MB) download into TTS_MODEL_DIR on first use.
+# Chosen over the browser's speechSynthesis so the companion sounds the same
+# on every device instead of inheriting whatever voice iOS picks.
+kokoro-onnx>=0.5,<0.6
+soundfile>=0.14,<0.15

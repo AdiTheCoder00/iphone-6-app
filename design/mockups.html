@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Companion — design directions</title>
+<style>
+/* ===========================================================================
+   Mockup gallery. Every screen below is the SAME markup; only a token set
+   changes. That is deliberate — whichever one you pick becomes a block of
+   custom properties dropped into companion.html, not a rewrite.
+   Screens are real 375x667 renders scaled down, so proportions are honest.
+   ========================================================================= */
+* , *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 40px 28px 60px;
+  background: #16181c;
+  color: #d7dde2;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+h1 { margin: 0 0 6px; font-size: 21px; font-weight: 600; }
+.sub { margin: 0 0 34px; color: #7d8a94; font-size: 13px; max-width: 760px; line-height: 1.55; }
+
+h2 {
+  margin: 40px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #93a3ad;
+}
+.cat-note { margin: 0 0 18px; color: #6d7ا880; }
+.cat-note { color: #6d7a84; font-size: 12px; margin: 0 0 18px; }
+
+.row { display: flex; flex-wrap: wrap; gap: 22px; }
+
+.card { width: 195px; }
+.frame {
+  width: 195px; height: 347px;
+  border-radius: 18px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.07), 0 10px 26px rgba(0,0,0,0.45);
+}
+/* The screen is authored at true device size then scaled, so nothing here
+   is guessing at proportion. */
+.screen {
+  position: absolute; top: 0; left: 0;
+  width: 375px; height: 667px;
+  transform: scale(0.52);
+  transform-origin: top left;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: radial-gradient(120% 80% at 50% 32%, var(--g1) 0%, var(--g2) 55%, var(--g3) 100%);
+  font-family: var(--font, inherit);
+}
+
+.label { margin-top: 10px; }
+.label strong { display: block; font-size: 13px; color: #e2e8ec; font-weight: 600; }
+.label span { display: block; margin-top: 2px; font-size: 11px; color: #79868f; }
+
+/* --- the shared screen template ----------------------------------------- */
+.glance { position: absolute; top: 52px; left: 0; right: 0; padding: 0 22px; text-align: center; }
+.glance .t {
+  color: var(--clock);
+  font-size: var(--clock-size, 36px);
+  font-weight: var(--clock-weight, 200);
+  letter-spacing: var(--clock-track, 0.01em);
+  line-height: 1.1;
+  font-family: var(--clock-font, inherit);
+}
+.glance .m { margin-top: 5px; color: var(--muted); font-size: 12px; letter-spacing: 0.03em; }
+
+.face { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 34px; }
+.eyes { display: flex; align-items: center; justify-content: center; }
+.eyes i {
+  display: block;
+  width: var(--eye-w); height: var(--eye-h);
+  border-radius: var(--eye-r);
+  background: var(--accent);
+  box-shadow: 0 0 var(--glow-blur, 22px) rgba(var(--accent-rgb), var(--glow, 0.45));
+}
+.eyes i:first-child { margin-right: calc(var(--eye-gap) / 2); }
+.eyes i:last-child  { margin-left:  calc(var(--eye-gap) / 2); }
+.mouth {
+  width: var(--mouth-w); height: var(--mouth-h);
+  margin-top: 12px;
+  border-bottom: var(--mouth-th, 5px) solid var(--accent);
+  border-radius: 0 0 var(--mouth-r, 4px) var(--mouth-r, 4px);
+  opacity: var(--mouth-op, 0.32);
+}
+
+.bubble {
+  position: absolute; left: 24px; right: 24px; bottom: 86px;
+  padding: 13px 16px;
+  border-radius: var(--bubble-r, 18px);
+  background: var(--bubble-bg);
+  border: 1px solid var(--bubble-border);
+  color: var(--bubble-text);
+  font-size: 15px; line-height: 1.42; text-align: center;
+}
+
+.dock { height: 76px; display: flex; align-items: center; justify-content: center; }
+.dock b {
+  width: 52px; height: 52px; border-radius: 50%;
+  border: 1px solid var(--dock-border);
+  background: var(--dock-bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.dock b:first-child { margin-right: 18px; }
+.dock b::after {
+  content: '';
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  background: var(--dock-icon);
+  opacity: 0.9;
+}
+.dock b:last-child::after { border-radius: 50% 50% 4px 4px; width: 12px; height: 20px; }
+
+/* =========================================================================
+   A · WARMER / SOFTER
+   ========================================================================= */
+.t-amber {
+  --g1:#241a12; --g2:#140e0a; --g3:#0b0705;
+  --accent:#f0a862; --accent-rgb:240,168,98; --glow:0.42; --glow-blur:26px;
+  --eye-w:76px; --eye-h:96px; --eye-r:34px; --eye-gap:56px;
+  --mouth-w:54px; --mouth-h:0px; --mouth-op:0.34;
+  --clock:#d8bda2; --muted:#8a7360;
+  --bubble-bg:rgba(44,32,24,0.94); --bubble-border:rgba(240,168,98,0.24); --bubble-text:#efe0d2;
+  --dock-bg:rgba(46,34,26,0.95); --dock-border:rgba(240,168,98,0.34); --dock-icon:#f0a862;
+}
+.t-terracotta {
+  --g1:#2b1c1a; --g2:#170f0e; --g3:#0c0807;
+  --accent:#e08b74; --accent-rgb:224,139,116; --glow:0.4; --glow-blur:28px;
+  --eye-w:84px; --eye-h:88px; --eye-r:42px; --eye-gap:50px;
+  --mouth-w:58px; --mouth-h:14px; --mouth-r:40px; --mouth-op:0.5;
+  --clock:#e2c0b4; --muted:#907069;
+  --bubble-bg:rgba(52,34,31,0.94); --bubble-border:rgba(224,139,116,0.26); --bubble-text:#f2e2dc;
+  --dock-bg:rgba(54,36,33,0.95); --dock-border:rgba(224,139,116,0.36); --dock-icon:#e08b74;
+  --bubble-r:22px;
+}
+.t-candle {
+  --g1:#1d160d; --g2:#100c07; --g3:#080604;
+  --accent:#c98f3f; --accent-rgb:201,143,63; --glow:0.34; --glow-blur:34px;
+  --eye-w:70px; --eye-h:92px; --eye-r:32px; --eye-gap:62px;
+  --mouth-w:42px; --mouth-h:0px; --mouth-op:0.24;
+  --clock:#bfa079; --muted:#78614a; --clock-weight:300; --clock-font:Georgia, serif; --clock-size:34px;
+  --bubble-bg:rgba(34,26,17,0.95); --bubble-border:rgba(201,143,63,0.2); --bubble-text:#e6d6bf;
+  --dock-bg:rgba(36,28,19,0.95); --dock-border:rgba(201,143,63,0.28); --dock-icon:#c98f3f;
+}
+.t-paper {
+  --g1:#f3ece1; --g2:#e8dfd2; --g3:#ddd2c2;
+  --accent:#3f3a34; --accent-rgb:63,58,52; --glow:0.12; --glow-blur:18px;
+  --eye-w:74px; --eye-h:94px; --eye-r:34px; --eye-gap:56px;
+  --mouth-w:52px; --mouth-h:0px; --mouth-op:0.5;
+  --clock:#4a443c; --muted:#8b8175; --clock-weight:300; --clock-font:Georgia, serif;
+  --bubble-bg:rgba(255,252,246,0.95); --bubble-border:rgba(63,58,52,0.16); --bubble-text:#3c372f;
+  --dock-bg:rgba(255,252,246,0.9); --dock-border:rgba(63,58,52,0.2); --dock-icon:#3f3a34;
+}
+
+/* =========================================================================
+   B · COOL / TECHNICAL
+   ========================================================================= */
+.t-instrument {
+  --g1:#101a1f; --g2:#0a1014; --g3:#05080a;
+  --accent:#4dd8e6; --accent-rgb:77,216,230; --glow:0.45;
+  --eye-w:72px; --eye-h:100px; --eye-r:26px; --eye-gap:58px;
+  --mouth-w:54px; --mouth-h:0px; --mouth-op:0.32; --mouth-th:4px;
+  --clock:#93aab6; --muted:#566a75; --clock-weight:200; --clock-track:0.06em;
+  --bubble-bg:rgba(19,28,34,0.94); --bubble-border:rgba(77,216,230,0.22); --bubble-text:#dfe9ee;
+  --dock-bg:rgba(22,31,37,0.95); --dock-border:rgba(77,216,230,0.38); --dock-icon:#4dd8e6;
+  --bubble-r:10px;
+}
+.t-steel {
+  --g1:#191c1f; --g2:#101316; --g3:#08090b;
+  --accent:#dfe8ee; --accent-rgb:223,232,238; --glow:0.3; --glow-blur:24px;
+  --eye-w:74px; --eye-h:96px; --eye-r:20px; --eye-gap:60px;
+  --mouth-w:50px; --mouth-h:0px; --mouth-op:0.28; --mouth-th:4px;
+  --clock:#aeb9c1; --muted:#65717a; --clock-weight:200; --clock-track:0.08em;
+  --bubble-bg:rgba(26,30,34,0.95); --bubble-border:rgba(223,232,238,0.16); --bubble-text:#dde3e8;
+  --dock-bg:rgba(28,33,37,0.95); --dock-border:rgba(223,232,238,0.24); --dock-icon:#dfe8ee;
+  --bubble-r:8px;
+}
+.t-deepteal {
+  --g1:#07202230; --g1:#082022; --g2:#041214; --g3:#020809;
+  --accent:#2fbfb0; --accent-rgb:47,191,176; --glow:0.5; --glow-blur:30px;
+  --eye-w:80px; --eye-h:104px; --eye-r:38px; --eye-gap:52px;
+  --mouth-w:56px; --mouth-h:0px; --mouth-op:0.36;
+  --clock:#7fb3ad; --muted:#456b68;
+  --bubble-bg:rgba(10,32,34,0.95); --bubble-border:rgba(47,191,176,0.28); --bubble-text:#d6efec;
+  --dock-bg:rgba(12,36,38,0.95); --dock-border:rgba(47,191,176,0.4); --dock-icon:#2fbfb0;
+}
+.t-blueprint {
+  --g1:#0e1730; --g2:#080e1c; --g3:#040610;
+  --accent:#6f9cf0; --accent-rgb:111,156,240; --glow:0.4;
+  --eye-w:70px; --eye-h:98px; --eye-r:14px; --eye-gap:62px;
+  --mouth-w:50px; --mouth-h:0px; --mouth-op:0.34; --mouth-th:3px;
+  --clock:#9db4dd; --muted:#5a6c8c; --clock-weight:200; --clock-track:0.1em;
+  --bubble-bg:rgba(15,24,46,0.95); --bubble-border:rgba(111,156,240,0.26); --bubble-text:#dde5f5;
+  --dock-bg:rgba(17,27,52,0.95); --dock-border:rgba(111,156,240,0.36); --dock-icon:#6f9cf0;
+  --bubble-r:6px;
+}
+
+/* =========================================================================
+   C · MORE ALIVE / EXPRESSIVE
+   ========================================================================= */
+.t-aurora {
+  --g1:#12213a; --g2:#0b1526; --g3:#060a14;
+  --accent:#7ee8c8; --accent-rgb:126,232,200; --glow:0.6; --glow-blur:36px;
+  --eye-w:86px; --eye-h:104px; --eye-r:42px; --eye-gap:50px;
+  --mouth-w:62px; --mouth-h:18px; --mouth-r:50px; --mouth-op:0.6;
+  --clock:#a9d8d0; --muted:#5e8a86;
+  --bubble-bg:rgba(18,33,54,0.94); --bubble-border:rgba(126,232,200,0.3); --bubble-text:#e2f4ee;
+  --dock-bg:rgba(20,37,60,0.95); --dock-border:rgba(126,232,200,0.42); --dock-icon:#7ee8c8;
+  --bubble-r:22px;
+}
+.t-bloom {
+  --g1:#231436; --g2:#150c22; --g3:#0a0611;
+  --accent:#c07ef0; --accent-rgb:192,126,240; --glow:0.62; --glow-blur:40px;
+  --eye-w:92px; --eye-h:98px; --eye-r:46px; --eye-gap:44px;
+  --mouth-w:64px; --mouth-h:22px; --mouth-r:56px; --mouth-op:0.68;
+  --clock:#cdaee6; --muted:#7e6592;
+  --bubble-bg:rgba(38,22,58,0.94); --bubble-border:rgba(192,126,240,0.32); --bubble-text:#f0e4fa;
+  --dock-bg:rgba(41,24,63,0.95); --dock-border:rgba(192,126,240,0.44); --dock-icon:#c07ef0;
+  --bubble-r:24px;
+}
+.t-creature {
+  --g1:#132420; --g2:#0b1613; --g3:#050a09;
+  --accent:#8fe06a; --accent-rgb:143,224,106; --glow:0.5; --glow-blur:30px;
+  /* Taller, narrower, closer together — reads as a face with a nose bridge. */
+  --eye-w:62px; --eye-h:112px; --eye-r:31px; --eye-gap:38px;
+  --mouth-w:46px; --mouth-h:16px; --mouth-r:44px; --mouth-op:0.55;
+  --clock:#a8ceA0; --clock:#a8cea0; --muted:#5d7d57;
+  --bubble-bg:rgba(20,38,32,0.94); --bubble-border:rgba(143,224,106,0.28); --bubble-text:#e4f4dd;
+  --dock-bg:rgba(22,42,35,0.95); --dock-border:rgba(143,224,106,0.4); --dock-icon:#8fe06a;
+  --bubble-r:20px;
+}
+.t-pulse {
+  --g1:#2a0f1c; --g2:#180810; --g3:#0b0407;
+  --accent:#ff5d8f; --accent-rgb:255,93,143; --glow:0.66; --glow-blur:42px;
+  --eye-w:88px; --eye-h:92px; --eye-r:44px; --eye-gap:46px;
+  --mouth-w:60px; --mouth-h:20px; --mouth-r:52px; --mouth-op:0.7;
+  --clock:#f0aec2; --muted:#96606f;
+  --bubble-bg:rgba(44,16,28,0.94); --bubble-border:rgba(255,93,143,0.3); --bubble-text:#ffe4ec;
+  --dock-bg:rgba(48,18,31,0.95); --dock-border:rgba(255,93,143,0.42); --dock-icon:#ff5d8f;
+  --bubble-r:22px;
+}
+
+/* =========================================================================
+   D · CALMER / MORE MINIMAL
+   ========================================================================= */
+.t-ink {
+  --g1:#0a0a0a; --g2:#050505; --g3:#000000;
+  --accent:#eceff1; --accent-rgb:236,239,241; --glow:0.16; --glow-blur:20px;
+  --eye-w:58px; --eye-h:76px; --eye-r:26px; --eye-gap:64px;
+  --mouth-w:40px; --mouth-h:0px; --mouth-op:0.18; --mouth-th:3px;
+  --clock:#8c9296; --muted:#4a4f52; --clock-weight:200; --clock-size:32px;
+  --bubble-bg:rgba(18,18,18,0.95); --bubble-border:rgba(236,239,241,0.1); --bubble-text:#cfd4d7;
+  --dock-bg:rgba(20,20,20,0.95); --dock-border:rgba(236,239,241,0.14); --dock-icon:#9aa0a4;
+  --bubble-r:14px;
+}
+.t-fog {
+  --g1:#1b1f22; --g2:#141719; --g3:#0e1012;
+  --accent:#93a7ae; --accent-rgb:147,167,174; --glow:0.2; --glow-blur:30px;
+  --eye-w:70px; --eye-h:88px; --eye-r:32px; --eye-gap:58px;
+  --mouth-w:46px; --mouth-h:0px; --mouth-op:0.2;
+  --clock:#8e9ba1; --muted:#5c686d; --clock-weight:200;
+  --bubble-bg:rgba(30,35,38,0.94); --bubble-border:rgba(147,167,174,0.14); --bubble-text:#cdd6da;
+  --dock-bg:rgba(32,37,40,0.95); --dock-border:rgba(147,167,174,0.2); --dock-icon:#93a7ae;
+  --bubble-r:16px;
+}
+.t-slate {
+  --g1:#161c24; --g2:#0f141a; --g3:#080b0f;
+  --accent:#7f9bb5; --accent-rgb:127,155,181; --glow:0.26; --glow-blur:26px;
+  --eye-w:68px; --eye-h:92px; --eye-r:30px; --eye-gap:60px;
+  --mouth-w:48px; --mouth-h:0px; --mouth-op:0.26;
+  --clock:#8ea3b6; --muted:#576775; --clock-weight:200; --clock-track:0.04em;
+  --bubble-bg:rgba(24,31,39,0.95); --bubble-border:rgba(127,155,181,0.18); --bubble-text:#d3dde6;
+  --dock-bg:rgba(26,34,43,0.95); --dock-border:rgba(127,155,181,0.26); --dock-icon:#7f9bb5;
+  --bubble-r:16px;
+}
+.t-void {
+  --g1:#060809; --g2:#030405; --g3:#000000;
+  --accent:#5fb8c4; --accent-rgb:95,184,196; --glow:0.3; --glow-blur:44px;
+  /* Eyes only. Everything else recedes almost to nothing. */
+  --eye-w:64px; --eye-h:64px; --eye-r:32px; --eye-gap:68px;
+  --mouth-w:0px; --mouth-h:0px; --mouth-op:0;
+  --clock:#5c6a6e; --muted:#394346; --clock-weight:100; --clock-size:30px; --clock-track:0.14em;
+  --bubble-bg:rgba(10,13,14,0.95); --bubble-border:rgba(95,184,196,0.12); --bubble-text:#b9c6c9;
+  --dock-bg:rgba(11,14,15,0.9); --dock-border:rgba(95,184,196,0.16); --dock-icon:#5fb8c4;
+  --bubble-r:12px;
+}
+</style>
+</head>
+<body>
+
+<h1>Companion — 16 design directions</h1>
+<p class="sub">
+  Every screen is the same markup at true 375×667, scaled down — so the proportions are
+  honest, not flattering. Only a set of CSS custom properties differs between them, which
+  means whichever you pick becomes a token block dropped into companion.html rather than a
+  rewrite. Eye geometry, glow, ground, type and bubble shape are all part of each direction.
+</p>
+
+<h2>A · Warmer / softer</h2>
+<p class="cat-note">Less instrument, more lamp. For a desk you sit at in the evening.</p>
+<div class="row" id="rowA"></div>
+
+<h2>B · Cool / technical</h2>
+<p class="cat-note">Stays cool and precise — the current language, executed four different ways.</p>
+<div class="row" id="rowB"></div>
+
+<h2>C · More alive / expressive</h2>
+<p class="cat-note">More creature than appliance. Bigger eyes, stronger bloom, a mouth that reads.</p>
+<div class="row" id="rowC"></div>
+
+<h2>D · Calmer / more minimal</h2>
+<p class="cat-note">Recedes until spoken to. Less colour, smaller features, quieter type.</p>
+<div class="row" id="rowD"></div>
+
+<script>
+var SETS = {
+  rowA: [
+    ['t-amber',      'Amber Lamp',   'warm amber · soft glow · unchanged geometry'],
+    ['t-terracotta', 'Terracotta',   'clay tones · rounder eyes · resting smile'],
+    ['t-candle',     'Candle',       'low ochre · serif clock · very dim'],
+    ['t-paper',      'Paper',        'light ground · dark eyes · daytime object']
+  ],
+  rowB: [
+    ['t-instrument', 'Instrument',   'current cyan · squarer eyes · tight radii'],
+    ['t-steel',      'Steel',        'no hue at all · near-white · hard edges'],
+    ['t-deepteal',   'Deep Teal',    'darker ground · heavier glow · larger eyes'],
+    ['t-blueprint',  'Blueprint',    'cool blue · slab eyes · wide tracking']
+  ],
+  rowC: [
+    ['t-aurora',     'Aurora',       'mint bloom · wide eyes · open smile'],
+    ['t-bloom',      'Bloom',        'violet · biggest eyes · heaviest glow'],
+    ['t-creature',   'Creature',     'tall narrow eyes · close set · most face-like'],
+    ['t-pulse',      'Pulse',        'hot pink · saturated · most energetic']
+  ],
+  rowD: [
+    ['t-ink',        'Ink',          'pure black · small white eyes · nearly no chrome'],
+    ['t-fog',        'Fog',          'low contrast throughout · muted grey-blue'],
+    ['t-slate',      'Slate',        'desaturated blue · restrained · steady'],
+    ['t-void',       'Void',         'round eyes only · no mouth · widest spacing']
+  ]
+};
+
+var TEMPLATE =
+  '<div class="glance"><div class="t">3:37 am</div><div class="m">Thursday · light drizzle · 27°C</div></div>' +
+  '<div class="face"><div class="eyes"><i></i><i></i></div><div class="mouth"></div></div>' +
+  '<div class="bubble">Morning. The rain has not let up yet.</div>' +
+  '<div class="dock"><b></b><b></b></div>';
+
+Object.keys(SETS).forEach(function (rowId) {
+  var row = document.getElementById(rowId);
+  SETS[rowId].forEach(function (entry) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML =
+      '<div class="frame"><div class="screen ' + entry[0] + '">' + TEMPLATE + '</div></div>' +
+      '<div class="label"><strong>' + entry[1] + '</strong><span>' + entry[2] + '</span></div>';
+    row.appendChild(card);
+  });
+});
+</script>
+</body>
+</html>

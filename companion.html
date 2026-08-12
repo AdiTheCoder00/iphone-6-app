@@ -1,0 +1,2502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#05070a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Companion" />
+<link rel="manifest" href="manifest.json" />
+<!-- iOS ignores the manifest's icons array for the home-screen icon. -->
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+<title>Companion</title>
+<style>
+/* ===========================================================================
+   1. SHELL — fixed 375x667 portrait (iPhone 6/6s). Not responsive by design.
+   ========================================================================= */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #05070a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  /* A desk device is a display, not a document: nothing here is selectable. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.stage {
+  /* Burn-in mitigation offset, nudged every few minutes from JS. Declared
+     here rather than on .face-root so everything that should move together —
+     the face and the idle readout — inherits the same value. A declaration on
+     .face-root itself would win over inheritance and pin it to zero. */
+  --drift-x: 0px;
+  --drift-y: 0px;
+
+  /* Accent lives here, NOT on .face-root, for the same reason. The composer,
+     dock, bubble and settings sheet are siblings of the face, not children —
+     declared on .face-root these resolved to nothing outside it, which left
+     the send button transparent and the dock icons black on near-black.
+     Hoisting them also means the emotion colour tween carries through the
+     whole interface rather than stopping at the eyes. */
+  --accent: #4dd8e6;
+  --accent-rgb: 77, 216, 230;
+
+  position: relative;
+  width: 375px;
+  height: 667px;
+  margin: 0 auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(120% 80% at 50% 32%, #131b21 0%, #0a0d0f 55%, #05070a 100%);
+}
+
+/* Desktop dev affordance only — the device fills the screen anyway. */
+@media (min-height: 700px) {
+  body { display: flex; align-items: center; justify-content: center; }
+  .stage { border-radius: 26px; box-shadow: 0 0 0 1px #1c2429, 0 24px 60px rgba(0,0,0,.6); }
+}
+
+/* ===========================================================================
+   2. AMBIENT — slow drifting light behind the face.
+   Two large, very low-opacity radial gradients on long offset cycles. No
+   particle canvas: this has to stay cheap enough to run for hours on an A9,
+   and transform/opacity on two layers costs essentially nothing.
+   ========================================================================= */
+.ambient {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ambient__blob {
+  position: absolute;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  opacity: 0.07;
+  will-change: transform;
+}
+.ambient__blob--a {
+  left: -120px; top: 40px;
+  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 1), rgba(var(--accent-rgb), 0) 70%);
+  animation: driftA 47s ease-in-out infinite;
+}
+.ambient__blob--b {
+  right: -140px; top: 240px;
+  background: radial-gradient(closest-side, rgba(140, 170, 255, 1), rgba(140, 170, 255, 0) 70%);
+  animation: driftB 61s ease-in-out infinite;
+  opacity: 0.05;
+}
+
+@keyframes driftA {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33%      { transform: translate3d(70px, 90px, 0) scale(1.12); }
+  66%      { transform: translate3d(30px, -60px, 0) scale(0.94); }
+}
+@keyframes driftB {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(-90px, -70px, 0) scale(1.15); }
+}
+
+/* ===========================================================================
+   3. FACE
+   ---------------------------------------------------------------------------
+   Layering rule: every element owns exactly ONE source of `transform`, so the
+   emotion pose, the blink and the looping animations never overwrite each
+   other.
+       .face-root   -> burn-in drift offset
+       .face        -> idle breathing (translate + scale)
+       .face__eyes  -> horizontal scan loop (think)
+       .eye         -> emotion pose: translate + rotate + scale
+       .eye__inner  -> blink: scaleY
+       .eye__glow   -> glow pulse loop
+       .eye__shape  -> no transform; carries size/radius/colour only
+   Custom properties are not themselves transitionable, so transitions are
+   declared on the properties that CONSUME them (width, height, ...).
+   ========================================================================= */
+.face-root {
+  /* Overwritten per-emotion from JS; these are the idle values.
+     --accent / --accent-rgb are deliberately NOT here — see .stage. */
+  --dur: 280ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --eye-w: 76px;
+  --eye-h: 96px;
+  --eye-radius: 34px;
+  --eye-gap: 56px;
+  --eye-opacity: 1;
+  --eye-shift-y: 0px;
+  --eye-rot-l: 0deg;
+  --eye-rot-r: 0deg;
+  --eye-scale-l: 1;
+  --eye-scale-r: 1;
+  --glow-opacity: 0.45;
+  --mouth-w: 54px;
+  --mouth-h: 0px;
+  --mouth-thickness: 5px;
+  --mouth-radius: 4px;
+  --mouth-opacity: 0.32;
+  --mouth-rot: 0deg;
+  --mouth-flip: 1;
+  --mouth-shift-y: 0px;
+
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Nudges the face toward the optical centre of the whole screen rather than
+     the centre of the space above the dock — with the clock sitting at the
+     top, dead-centring the remainder read as top-heavy. */
+  padding-top: 34px;
+  transform: translate3d(var(--drift-x), var(--drift-y), 0);
+  /* Long and eased so the shift is never perceived as movement. */
+  transition: transform 3000ms ease-in-out;
+}
+
+.face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: breathe 4.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.face__eyes {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform;
+}
+
+.eye {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--dur) var(--ease);
+  will-change: transform;
+}
+.eye--left  { transform: translateY(var(--eye-shift-y)) rotate(var(--eye-rot-l)) scale(var(--eye-scale-l)); }
+.eye--right { transform: translateY(var(--eye-shift-y)) rotate(var(--eye-rot-r)) scale(var(--eye-scale-r)); }
+
+/* Margin rather than flex `gap`: transitionable, and safe on older iOS. */
+.eye--left  { margin-right: calc(var(--eye-gap) / 2); }
+.eye--right { margin-left:  calc(var(--eye-gap) / 2); }
+.eye--left, .eye--right { transition: transform var(--dur) var(--ease), margin var(--dur) var(--ease); }
+
+.eye__inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: scaleY(1);
+  transition: transform 130ms ease-out;
+  will-change: transform;
+}
+/* Blink. Fast to close, slightly slower to open. */
+.face-root[data-blinking="true"] .eye__inner {
+  transform: scaleY(0.06);
+  transition-duration: 90ms;
+}
+
+.eye__shape {
+  width: var(--eye-w);
+  height: var(--eye-h);
+  border-radius: var(--eye-radius);
+  background: var(--accent);
+  opacity: var(--eye-opacity);
+  /* Static shadow only — never animated in a loop (it repaints every frame). */
+  box-shadow: 0 0 22px rgba(var(--accent-rgb), 0.45);
+  transition:
+    width var(--dur) var(--ease),
+    height var(--dur) var(--ease),
+    border-radius var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+
+/* The pulsing halo. A radial gradient, not a blur filter: same softness at a
+   fraction of the cost on a 2015 GPU, and only opacity/scale ever animate. */
+.eye__glow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--eye-w) * 2.4);
+  height: calc(var(--eye-h) * 1.9);
+  margin: 0;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.55), rgba(var(--accent-rgb), 0) 72%);
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  transition:
+    opacity var(--dur) var(--ease),
+    width var(--dur) var(--ease),
+    height var(--dur) var(--ease);
+  will-change: opacity, transform;
+}
+
+.face__mouth {
+  /* Was 40/26, which left ~45px between the eyes and a 5px line — at a
+     glance the mouth read as a stray dash rather than part of the face.
+     Tighter groups the three features as one unit. */
+  height: 30px;
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Arc via a bordered box: height 0 is a flat line, height + big corner radius
+   is a curve, and scaleY(-1) turns a smile into a frown.
+   While speaking, --talk-open is driven from the audio amplitude and simply
+   adds to the mouth height, so the emotion's own mouth shape still shows
+   through instead of being replaced by a generic talking mouth. */
+.mouth__arc {
+  width: var(--mouth-w);
+  height: calc(var(--mouth-h) + var(--talk-open, 0px));
+  border-bottom: var(--mouth-thickness) solid var(--accent);
+  border-radius: 0 0 var(--mouth-radius) var(--mouth-radius);
+  opacity: var(--mouth-opacity);
+  transform: translateY(var(--mouth-shift-y)) rotate(var(--mouth-rot)) scaleY(var(--mouth-flip));
+  transition:
+    width var(--dur) var(--ease),
+    height var(--dur) var(--ease),
+    border-radius var(--dur) var(--ease),
+    border-bottom-width var(--dur) var(--ease),
+    opacity var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+/* --- idle / per-emotion loops --------------------------------------------- */
+/* Breathing carries a scale as well as a lift, so the face is never perfectly
+   static between blinks. 1.5% is below the threshold of noticing directly but
+   reads as "alive" peripherally. */
+@keyframes breathe {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(0, -5px, 0) scale(1.015); }
+}
+
+@keyframes scan {
+  0%, 100% { transform: translate3d(-11px, 0, 0); }
+  50%      { transform: translate3d(11px, 0, 0); }
+}
+
+/* Alternating eyes read unmistakably as "working on it". */
+@keyframes processing {
+  0%, 100% { opacity: var(--eye-opacity); }
+  50%      { opacity: 0.28; }
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: var(--glow-opacity); transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: calc(var(--glow-opacity) * 1.35); transform: translate(-50%, -50%) scale(1.14); }
+}
+
+/* One-shot acknowledgement flash, used when a wake/attention event lands. */
+@keyframes ackPulse {
+  0%   { opacity: var(--glow-opacity); transform: translate(-50%, -50%) scale(1); }
+  40%  { opacity: 1;                   transform: translate(-50%, -50%) scale(1.28); }
+  100% { opacity: var(--glow-opacity); transform: translate(-50%, -50%) scale(1); }
+}
+
+.face-root[data-emotion="think"] .face__eyes {
+  animation: scan 2.2s ease-in-out infinite;
+}
+.face-root[data-emotion="think"] .eye--left  .eye__shape { animation: processing 1.5s ease-in-out infinite; }
+.face-root[data-emotion="think"] .eye--right .eye__shape { animation: processing 1.5s ease-in-out infinite 0.75s; }
+
+.face-root[data-emotion="listen"] .eye__glow {
+  animation: glowPulse 1.5s ease-in-out infinite;
+}
+
+.face-root[data-emotion="happy"] .face { animation-duration: 3.2s; }
+.face-root[data-emotion="sleepy"] .face { animation-duration: 7.5s; }
+
+/* Wins over the per-emotion loops above while it plays. */
+.face-root[data-ack="true"] .eye__glow {
+  animation: ackPulse 520ms ease-out !important;
+}
+
+/* Speaking. The 280ms emotion transition is far too slow to track syllables,
+   so height switches to a short one for the duration; and the mouth is forced
+   visible even in states that normally hide it (think, sleepy). */
+.face-root[data-talking="true"] .mouth__arc {
+  transition: height 70ms linear, opacity 200ms ease;
+  opacity: 0.75;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .face, .face__eyes, .eye__glow, .eye__shape, .ambient__blob { animation: none !important; }
+  .face-root { transition: none !important; }
+}
+
+/* ===========================================================================
+   3b. GLANCE — time and weather while idle.
+   Sits above the face and fades out the moment the companion is doing
+   anything, so it never competes with the face for attention. Drifts with the
+   face (inherited --drift-*) so it is not a static bright element either.
+   ========================================================================= */
+.glance {
+  position: absolute;
+  top: 52px;
+  left: 0; right: 0;
+  z-index: 1;
+  /* Without this the date+weather line ran flush into both screen edges. */
+  padding: 0 22px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  /* Slow fade on purpose: a readout that snaps in reads as an alert.
+     The transform duration must match .face-root's, or the burn-in shift
+     makes the clock jump while the face glides to the same offset. */
+  transition: opacity 700ms ease, transform 3000ms ease-in-out;
+  transform: translate3d(var(--drift-x), var(--drift-y), 0);
+}
+.glance[data-visible="true"] { opacity: 1; }
+
+.glance__time {
+  color: #93aab6;
+  font-size: 36px;
+  font-weight: 200;
+  letter-spacing: 0.01em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.glance__meta {
+  margin-top: 5px;
+  color: #566a75;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+/* ===========================================================================
+   4. CHAT LAYER — speech bubble, input row, bottom dock.
+   ========================================================================= */
+.bubble {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  /* Sits low, just above the dock, and grows upward into the gap below the
+     face. At the old bottom:172/max-height:132 a 220-character reply was
+     clipped AND auto-dismissed — text you cannot finish reading before it
+     disappears. The model targets ~200 chars but overshoots. */
+  bottom: 86px;
+  z-index: 3;
+  padding: 13px 16px;
+  border-radius: 18px;
+  background: rgba(22, 30, 36, 0.92);
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  color: #dfe9ee;
+  font-size: 15px;
+  line-height: 1.42;
+  text-align: center;
+  max-height: 186px;
+  overflow-y: auto;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 280ms cubic-bezier(0.4,0,0.2,1), transform 280ms cubic-bezier(0.4,0,0.2,1);
+  pointer-events: none;
+}
+.bubble[data-visible="true"] { opacity: 1; transform: translateY(0); }
+.bubble[data-error="true"] { border-color: rgba(224, 122, 122, 0.35); color: #e6c7c7; }
+
+/* With the composer up the bubble would sit under the input, so it moves
+   above it and gives back the height. */
+.stage[data-composer="open"] .bubble {
+  bottom: calc(156px + var(--kb, 0px));
+  max-height: 118px;
+}
+
+.composer {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  /* --kb is the height the on-screen keyboard covers, measured from
+     visualViewport. The stage is a fixed 667px with overflow hidden, so iOS
+     cannot scroll the input into view the way it would on a normal page —
+     without this the composer sits behind the keyboard you are typing on. */
+  bottom: calc(96px + var(--kb, 0px));
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 240ms cubic-bezier(0.4,0,0.2,1), transform 240ms cubic-bezier(0.4,0,0.2,1);
+  pointer-events: none;
+}
+.composer[data-open="true"] { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+.composer__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  background: rgba(16, 22, 27, 0.95);
+  color: #e6eef2;
+  font-size: 16px; /* 16px keeps iOS Safari from zooming on focus. */
+  outline: none;
+  -webkit-appearance: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.composer__input::placeholder { color: #5d6d76; }
+.composer__input:focus { border-color: rgba(var(--accent-rgb), 0.6); }
+.composer__input:disabled { opacity: 0.5; }
+
+.composer__send {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  margin-left: 8px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #05161a;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.composer__send:disabled { opacity: 0.4; }
+
+.dock {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* No rule across the bottom: a hard 1px seam cut the screen in two and
+     fought the soft radial background. */
+  transition: opacity 300ms ease;
+}
+
+.dock__chat, .dock__mic {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Lifted from 0.25/0.9: against the near-black background the controls sat
+     close to invisible, which is wrong for the only two things on screen you
+     are meant to touch. */
+  border: 1px solid rgba(var(--accent-rgb), 0.38);
+  border-radius: 50%;
+  background: rgba(24, 33, 39, 0.95);
+  color: var(--accent);
+  cursor: pointer;
+  transition: transform 200ms ease, border-color 200ms ease;
+}
+.dock__chat { margin-right: 18px; }
+.dock__chat:active, .dock__mic:active { transform: scale(0.93); }
+.dock__chat[aria-expanded="true"] { border-color: rgba(var(--accent-rgb), 0.6); }
+.dock__chat svg, .dock__mic svg { width: 23px; height: 23px; display: block; }
+
+/* Hidden entirely when the browser has no MediaRecorder, or the user denied
+   the mic — the text composer remains the full fallback. */
+.dock__mic[hidden] { display: none; }
+
+/* Held down and capturing. */
+.dock__mic[data-recording="true"] {
+  border-color: rgba(232, 122, 122, 0.85);
+  color: #ff8f8f;
+  animation: micPulse 1.1s ease-in-out infinite;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232, 122, 122, 0.38); }
+  50%      { box-shadow: 0 0 0 9px rgba(232, 122, 122, 0); }
+}
+
+/* One-time explanation shown before the browser's own permission dialog, so
+   the OS prompt never arrives without context. */
+.micPrompt {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  background: rgba(3, 6, 9, 0.86);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+.micPrompt[data-open="true"] { opacity: 1; pointer-events: auto; }
+
+.micPrompt__card {
+  width: 100%;
+  padding: 24px 22px;
+  border-radius: 18px;
+  background: #0e151a;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  text-align: center;
+}
+.micPrompt__title { margin: 0 0 10px; color: #dfe9ee; font-size: 17px; }
+.micPrompt__body { margin: 0 0 20px; color: #8b9ea8; font-size: 13px; line-height: 1.55; }
+.micPrompt__row { display: flex; gap: 10px; }
+.micPrompt__btn {
+  flex: 1 1 0;
+  height: 42px;
+  border: none;
+  border-radius: 21px;
+  background: var(--accent);
+  color: #05161a;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.micPrompt__btn--ghost {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.14);
+  color: #8b9ea8;
+  font-weight: 400;
+}
+
+/* ===========================================================================
+   5. KIOSK — standalone PWA chrome hiding, dim overlay, retry, settings.
+   ========================================================================= */
+
+/* In standalone the dock rests hidden so the face is the whole product — but
+   NOT permanently. Hiding it outright (pointer-events: none forever) left the
+   installed app with no way to chat or talk at all: long-press for settings
+   was the only gesture that still worked. A tap anywhere brings it back for a
+   few seconds. The row keeps its height either way so the face does not jump
+   between browser and installed mode. */
+body[data-standalone="true"] .dock { opacity: 0; pointer-events: none; }
+body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-events: auto; }
+
+/* Night dimming. A black overlay rather than `filter: brightness()` on the
+   stage: filter forces the whole subtree through an offscreen buffer every
+   frame, which on an A9 costs far more than compositing one opacity layer. */
+.dim {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 5;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms ease;
+}
+
+.retry {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 84px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #7d8f99;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+.retry[data-visible="true"] { opacity: 1; }
+.retry__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c98b8b;
+  animation: retryPulse 1.6s ease-in-out infinite;
+}
+@keyframes retryPulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+.settings {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 6;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(3, 6, 9, 0.72);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+.settings[data-open="true"] { opacity: 1; pointer-events: auto; }
+
+.settings__sheet {
+  width: 100%;
+  /* Capped and scrollable. The sheet grows with every reminder and
+     remembered fact, and unbounded it ran past the top of a 667px screen —
+     taking the title with it and leaving nothing to tap to dismiss. */
+  max-height: 76vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 20px 22px;
+  background: #0e151a;
+  border-top: 1px solid rgba(var(--accent-rgb), 0.18);
+  border-radius: 20px 20px 0 0;
+  transform: translateY(14px);
+  transition: transform 260ms cubic-bezier(0.4,0,0.2,1);
+}
+.settings[data-open="true"] .settings__sheet { transform: translateY(0); }
+
+/* Sticky so the title and the drag handle stay put while the body scrolls —
+   without it there is no visual anchor and no hint that the sheet scrolls. */
+.settings__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -20px 14px;
+  padding: 14px 20px 11px;
+  background: #0e151a;
+  color: #8fa3ad;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+/* Grab handle: the only affordance that this is a dismissable sheet. */
+.settings__title::before {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 12px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.16);
+}
+
+.field { margin-bottom: 15px; }
+.field:last-child { margin-bottom: 0; }
+.field__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+  color: #b6c6cf;
+  font-size: 13px;
+}
+.field__value { color: #6e828d; font-size: 12px; }
+
+.field__input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.09);
+  background: #070c10;
+  color: #dfe9ee;
+  font-size: 15px;
+  outline: none;
+  -webkit-appearance: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.field__input:focus { border-color: rgba(var(--accent-rgb), 0.5); }
+
+.field__range {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #22303a;
+  outline: none;
+}
+.field__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 10px;
+  background: #070c10;
+  color: #dfe9ee;
+  font-size: 14px;
+  cursor: pointer;
+}
+.toggle[aria-pressed="true"] {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  color: var(--accent);
+}
+.toggle__state { color: #6e828d; font-size: 12px; }
+.toggle[aria-pressed="true"] .toggle__state { color: var(--accent); }
+
+/* Inspectable lists (pending reminders, remembered facts). Memory the user
+   cannot see or delete is memory they cannot trust, so both are listed with a
+   per-row remove. */
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Two rows before this list scrolls on its own, so a long reminder list
+     cannot push everything below it off the sheet. */
+  max-height: 108px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.rows:empty { display: none; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 9px;
+  background: #070c10;
+}
+.row:last-child { margin-bottom: 0; }
+
+.row__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #c3d2da;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.row__when { display: block; margin-top: 2px; color: #5f727c; font-size: 11px; }
+
+/* 34px visible, but padded out to a 44px hit area via the pseudo-element
+   below — 26px was well under the 44x44 minimum and sat right beside text
+   you would be scrolling past. */
+.row__x {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px; height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.06);
+  color: #93a6b0;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.row__x::after {
+  content: '';
+  position: absolute;
+  top: -5px; right: -5px; bottom: -5px; left: -5px;
+}
+.row__x:active { background: rgba(224,122,122,0.25); color: #ffb3b3; }
+
+.rows__empty {
+  padding: 9px 2px;
+  color: #4f6069;
+  font-size: 12px;
+}
+
+.settings__hint {
+  margin: 16px 0 0;
+  color: #55666f;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <!-- ------------------------------------------------------------- AMBIENT -->
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient__blob ambient__blob--a"></div>
+    <div class="ambient__blob ambient__blob--b"></div>
+  </div>
+
+  <!-- -------------------------------------------------------------- GLANCE -->
+  <div class="glance" id="glance" data-visible="false" aria-hidden="true">
+    <div class="glance__time" id="glanceTime"></div>
+    <div class="glance__meta" id="glanceMeta"></div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- FACE -->
+  <div class="face-root" id="face" data-emotion="idle" data-blinking="false" role="img" aria-label="Companion face">
+    <div class="face">
+      <div class="face__eyes">
+        <div class="eye eye--left">
+          <div class="eye__inner">
+            <div class="eye__glow"></div>
+            <div class="eye__shape"></div>
+          </div>
+        </div>
+        <div class="eye eye--right">
+          <div class="eye__inner">
+            <div class="eye__glow"></div>
+            <div class="eye__shape"></div>
+          </div>
+        </div>
+      </div>
+      <div class="face__mouth"><div class="mouth__arc"></div></div>
+    </div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- CHAT -->
+  <div class="bubble" id="bubble" data-visible="false" role="status" aria-live="polite"></div>
+
+  <form class="composer" id="composer" data-open="false" autocomplete="off">
+    <input class="composer__input" id="composerInput" type="text" placeholder="Say something…"
+           maxlength="2000" enterkeyhint="send" aria-label="Message" />
+    <button class="composer__send" id="composerSend" type="submit" aria-label="Send">↑</button>
+  </form>
+
+  <div class="retry" id="retry" data-visible="false" role="status">
+    <span class="retry__dot"></span><span id="retryText">can’t reach the backend</span>
+  </div>
+
+  <div class="dock" id="dock">
+    <button class="dock__chat" id="chatToggle" type="button" aria-expanded="false" aria-label="Open chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-3.6-.7L3 21l1.9-4.9A8.2 8.2 0 0 1 3.6 11.5a8.4 8.4 0 0 1 9-8.4 8.4 8.4 0 0 1 8.4 8.4z"/>
+      </svg>
+    </button>
+    <button class="dock__mic" id="micBtn" type="button" data-recording="false"
+            aria-label="Hold to talk">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="2.5" width="6" height="11" rx="3"/>
+        <path d="M5.5 11a6.5 6.5 0 0 0 13 0"/>
+        <path d="M12 17.5V21"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ------------------------------------------------------- MIC CONSENT -->
+  <div class="micPrompt" id="micPrompt" data-open="false" role="dialog" aria-label="Enable microphone">
+    <div class="micPrompt__card">
+      <h2 class="micPrompt__title">Enable the microphone?</h2>
+      <p class="micPrompt__body">
+        Hold the mic button to talk. Your voice is sent to your own backend to be
+        transcribed, and nowhere else.<br /><br />
+        Your browser will ask for permission next.
+      </p>
+      <div class="micPrompt__row">
+        <button class="micPrompt__btn micPrompt__btn--ghost" id="micDeny" type="button">Not now</button>
+        <button class="micPrompt__btn" id="micAllow" type="button">Enable</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------ SETTINGS -->
+  <div class="settings" id="settings" data-open="false" role="dialog" aria-label="Settings" aria-modal="true">
+    <div class="settings__sheet" id="settingsSheet">
+      <h2 class="settings__title">Settings</h2>
+
+      <div class="field">
+        <label class="field__label" for="setBackend">Backend URL</label>
+        <input class="field__input" id="setBackend" type="url" inputmode="url"
+               autocapitalize="off" autocorrect="off" spellcheck="false"
+               placeholder="http://192.168.1.20:8000" />
+      </div>
+
+      <div class="field">
+        <label class="field__label" for="setCity">
+          Weather city <span class="field__value">idle screen</span>
+        </label>
+        <input class="field__input" id="setCity" type="text"
+               autocapitalize="words" autocorrect="off" spellcheck="false"
+               placeholder="leave blank for none" />
+      </div>
+
+      <div class="field">
+        <label class="field__label" for="setDim">
+          Screen dim <span class="field__value" id="setDimValue">0%</span>
+        </label>
+        <input class="field__range" id="setDim" type="range" min="0" max="85" step="5" value="0" />
+      </div>
+
+      <div class="field">
+        <div class="field__label">
+          Reminders <span class="field__value" id="remindersCount">—</span>
+        </div>
+        <ul class="rows" id="remindersList"></ul>
+      </div>
+
+      <div class="field">
+        <div class="field__label">
+          Remembers <span class="field__value" id="factsCount">—</span>
+        </div>
+        <ul class="rows" id="factsList"></ul>
+      </div>
+
+      <div class="field">
+        <button class="toggle" id="setVoice" type="button" aria-pressed="true">
+          <span>Speak replies</span><span class="toggle__state" id="setVoiceState">On</span>
+        </button>
+      </div>
+
+      <div class="field">
+        <button class="toggle" id="setSleep" type="button" aria-pressed="false">
+          <span>Sleep now</span><span class="toggle__state" id="setSleepState">Off</span>
+        </button>
+      </div>
+
+      <div class="field">
+        <button class="toggle" id="setForget" type="button">
+          <span>Forget conversation</span><span class="toggle__state" id="setForgetState">—</span>
+        </button>
+      </div>
+
+      <p class="settings__hint">
+        Long-press anywhere to reopen · tap outside to close<br />
+        For an always-on desk device also set<br />
+        Settings › Display &amp; Brightness › Auto-Lock › Never
+      </p>
+    </div>
+  </div>
+
+  <div class="dim" id="dim" aria-hidden="true"></div>
+</div>
+
+<script>
+/* ===========================================================================
+   CONFIG — persisted settings.
+   localStorage is fine here: this file is self-hosted and opened directly,
+   not embedded in a sandboxed context.
+   ========================================================================= */
+window.CompanionConfig = (function () {
+  'use strict';
+
+  var KEY = 'companion.settings.v1';
+  var DEFAULTS = {
+    backendUrl: 'http://localhost:8000',
+    dim: 0,
+    sleepNow: false,
+    voice: true,
+    /* Blank means the idle readout shows the date only, no weather. */
+    city: ''
+  };
+  var listeners = [];
+  var state;
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      var parsed = raw ? JSON.parse(raw) : {};
+      return {
+        backendUrl: typeof parsed.backendUrl === 'string' && parsed.backendUrl
+          ? parsed.backendUrl : DEFAULTS.backendUrl,
+        dim: typeof parsed.dim === 'number' ? parsed.dim : DEFAULTS.dim,
+        sleepNow: !!parsed.sleepNow,
+        voice: typeof parsed.voice === 'boolean' ? parsed.voice : DEFAULTS.voice,
+        city: typeof parsed.city === 'string' ? parsed.city : DEFAULTS.city
+      };
+    } catch (e) {
+      /* Private mode or a corrupt value: fall back rather than fail to boot. */
+      console.warn('[Companion] settings unreadable, using defaults:', e);
+      return {
+        backendUrl: DEFAULTS.backendUrl, dim: DEFAULTS.dim,
+        sleepNow: DEFAULTS.sleepNow, voice: DEFAULTS.voice, city: DEFAULTS.city
+      };
+    }
+  }
+
+  state = load();
+
+  function persist() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); }
+    catch (e) { console.warn('[Companion] could not save settings:', e); }
+  }
+
+  function get(key) { return state[key]; }
+
+  function set(key, value) {
+    if (state[key] === value) return;
+    state[key] = value;
+    persist();
+    for (var i = 0; i < listeners.length; i++) listeners[i](key, value);
+  }
+
+  /* Trailing slashes would produce '…//chat'. */
+  function backendUrl() { return String(state.backendUrl).replace(/\/+$/, ''); }
+
+  function onChange(fn) { listeners.push(fn); }
+
+  return { get: get, set: set, backendUrl: backendUrl, onChange: onChange };
+})();
+
+
+/* ===========================================================================
+   FACE MODULE
+   Exposes window.Companion.setEmotion(name) / window.Companion.current().
+   Self-contained: everything else talks to it only through that API.
+   ========================================================================= */
+window.Companion = (function () {
+  'use strict';
+
+  var root = document.getElementById('face');
+
+  /* Minimum spacing between two applied transitions. A backend that answers
+     unusually fast can otherwise stack pose changes inside one 280ms
+     transition and produce a visible snap. Later requests inside the window
+     collapse to the most recent one — queueing every intermediate state would
+     just replay the jank slightly later. */
+  var MIN_EMOTION_GAP_MS = 200;
+  var ACCENT_TWEEN_MS = 400;
+
+  var DEFAULT_BLINK = { enabled: true, minDelay: 2500, maxDelay: 6000, duration: 140, doubleChance: 0.2 };
+
+  function blink(overrides) {
+    var cfg = { enabled: DEFAULT_BLINK.enabled, minDelay: DEFAULT_BLINK.minDelay,
+                maxDelay: DEFAULT_BLINK.maxDelay, duration: DEFAULT_BLINK.duration,
+                doubleChance: DEFAULT_BLINK.doubleChance };
+    for (var k in overrides) { if (Object.prototype.hasOwnProperty.call(overrides, k)) cfg[k] = overrides[k]; }
+    return cfg;
+  }
+
+  /* Geometry is tuned for a 375px-wide screen: two ~76px eyes + a 56px gap.
+     `accent` is tweened rather than swapped — see applyPreset. */
+  var PRESETS = {
+    idle: {
+      accent: [77, 216, 230],
+      vars: {
+        '--eye-w': '76px', '--eye-h': '96px', '--eye-radius': '34px', '--eye-gap': '56px',
+        '--eye-opacity': '1', '--eye-shift-y': '0px',
+        '--eye-rot-l': '0deg', '--eye-rot-r': '0deg', '--eye-scale-l': '1', '--eye-scale-r': '1',
+        '--glow-opacity': '0.45',
+        '--mouth-w': '54px', '--mouth-h': '0px', '--mouth-thickness': '5px', '--mouth-radius': '4px',
+        '--mouth-opacity': '0.32', '--mouth-rot': '0deg', '--mouth-flip': '1', '--mouth-shift-y': '0px'
+      },
+      blink: blink({})
+    },
+
+    /* Squashed to ~44% height at full corner radius: a warm squint out of the
+       same rounded rect, so no shape swap is needed. */
+    happy: {
+      accent: [92, 230, 184],
+      vars: {
+        '--eye-w': '80px', '--eye-h': '42px', '--eye-radius': '34px', '--eye-gap': '56px',
+        '--eye-opacity': '1', '--eye-shift-y': '-6px',
+        '--eye-rot-l': '-8deg', '--eye-rot-r': '8deg', '--eye-scale-l': '1', '--eye-scale-r': '1',
+        '--glow-opacity': '0.62',
+        '--mouth-w': '66px', '--mouth-h': '26px', '--mouth-thickness': '5px', '--mouth-radius': '60px',
+        '--mouth-opacity': '0.85', '--mouth-rot': '0deg', '--mouth-flip': '1', '--mouth-shift-y': '4px'
+      },
+      blink: blink({ minDelay: 3500, maxDelay: 7000, doubleChance: 0.3 })
+    },
+
+    think: {
+      accent: [122, 168, 240],
+      vars: {
+        '--eye-w': '68px', '--eye-h': '82px', '--eye-radius': '30px', '--eye-gap': '52px',
+        '--eye-opacity': '1', '--eye-shift-y': '0px',
+        '--eye-rot-l': '0deg', '--eye-rot-r': '0deg', '--eye-scale-l': '1', '--eye-scale-r': '1',
+        '--glow-opacity': '0.4',
+        '--mouth-w': '40px', '--mouth-h': '0px', '--mouth-thickness': '5px', '--mouth-radius': '4px',
+        '--mouth-opacity': '0', '--mouth-rot': '0deg', '--mouth-flip': '1', '--mouth-shift-y': '0px'
+      },
+      /* Suppressed so it doesn't fight the processing pulse. */
+      blink: blink({ enabled: false })
+    },
+
+    listen: {
+      accent: [110, 232, 242],
+      vars: {
+        '--eye-w': '84px', '--eye-h': '108px', '--eye-radius': '40px', '--eye-gap': '58px',
+        '--eye-opacity': '1', '--eye-shift-y': '-2px',
+        '--eye-rot-l': '0deg', '--eye-rot-r': '0deg', '--eye-scale-l': '1', '--eye-scale-r': '1',
+        '--glow-opacity': '0.85',
+        '--mouth-w': '40px', '--mouth-h': '0px', '--mouth-thickness': '5px', '--mouth-radius': '4px',
+        '--mouth-opacity': '0.45', '--mouth-rot': '0deg', '--mouth-flip': '1', '--mouth-shift-y': '0px'
+      },
+      /* Eyes stay open while attention is on the user. */
+      blink: blink({ enabled: false })
+    },
+
+    /* Inner corners lifted = the sad brow. The right eye is slightly smaller,
+       which nudges the read toward "confused" rather than purely sad. */
+    sad: {
+      accent: [107, 143, 168],
+      vars: {
+        '--eye-w': '72px', '--eye-h': '82px', '--eye-radius': '32px', '--eye-gap': '56px',
+        '--eye-opacity': '0.85', '--eye-shift-y': '10px',
+        '--eye-rot-l': '12deg', '--eye-rot-r': '-12deg', '--eye-scale-l': '1', '--eye-scale-r': '0.88',
+        '--glow-opacity': '0.28',
+        '--mouth-w': '58px', '--mouth-h': '20px', '--mouth-thickness': '5px', '--mouth-radius': '60px',
+        '--mouth-opacity': '0.6', '--mouth-rot': '-6deg', '--mouth-flip': '-1', '--mouth-shift-y': '10px'
+      },
+      blink: blink({ minDelay: 4000, maxDelay: 8000, duration: 220, doubleChance: 0 })
+    },
+
+    sleepy: {
+      accent: [61, 90, 104],
+      vars: {
+        '--eye-w': '76px', '--eye-h': '14px', '--eye-radius': '8px', '--eye-gap': '56px',
+        '--eye-opacity': '0.45', '--eye-shift-y': '8px',
+        '--eye-rot-l': '0deg', '--eye-rot-r': '0deg', '--eye-scale-l': '1', '--eye-scale-r': '1',
+        '--glow-opacity': '0.15',
+        '--mouth-w': '34px', '--mouth-h': '0px', '--mouth-thickness': '4px', '--mouth-radius': '4px',
+        '--mouth-opacity': '0', '--mouth-rot': '0deg', '--mouth-flip': '1', '--mouth-shift-y': '0px'
+      },
+      /* Rare, long, heavy blinks. */
+      blink: { enabled: true, minDelay: 5000, maxDelay: 11000, duration: 600, doubleChance: 0 }
+    }
+  };
+
+  var EMOTIONS = ['idle', 'happy', 'think', 'listen', 'sad', 'sleepy'];
+  var currentEmotion = 'idle';
+  var blinkTimer = null;
+
+  var reduceMotion = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* --- accent crossfade --------------------------------------------------
+     CSS custom properties cannot be transitioned, and @property (which would
+     make them animatable) is unavailable on the iOS versions a 6s can run.
+     So the colour is interpolated frame by frame in JS instead. */
+  var accentRgb = PRESETS.idle.accent.slice();
+  var accentRaf = null;
+
+  function writeAccent(rgb) {
+    /* Written to the stage, not the face: everything outside .face-root — the
+       dock, composer, bubble and settings — needs to inherit it too. */
+    var stage = document.getElementById('stage');
+    stage.style.setProperty('--accent', 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')');
+    stage.style.setProperty('--accent-rgb', rgb[0] + ', ' + rgb[1] + ', ' + rgb[2]);
+  }
+
+  function tweenAccent(target) {
+    if (accentRaf !== null) { cancelAnimationFrame(accentRaf); accentRaf = null; }
+    if (reduceMotion) { accentRgb = target.slice(); writeAccent(accentRgb); return; }
+
+    var from = accentRgb.slice();
+    var start = null;
+    function step(ts) {
+      if (start === null) start = ts;
+      var t = Math.min(1, (ts - start) / ACCENT_TWEEN_MS);
+      var eased = t * (2 - t);                        // ease-out quad
+      accentRgb = [
+        Math.round(from[0] + (target[0] - from[0]) * eased),
+        Math.round(from[1] + (target[1] - from[1]) * eased),
+        Math.round(from[2] + (target[2] - from[2]) * eased)
+      ];
+      writeAccent(accentRgb);
+      accentRaf = t < 1 ? requestAnimationFrame(step) : null;
+    }
+    accentRaf = requestAnimationFrame(step);
+  }
+
+  /* --- blink scheduler ---------------------------------------------------
+     Timing lives in JS, not a keyframe: a fixed CSS interval reads as
+     robotic, and irregular gaps are most of what sells "alive". */
+  function stopBlinking() {
+    if (blinkTimer !== null) { clearTimeout(blinkTimer); blinkTimer = null; }
+    root.setAttribute('data-blinking', 'false');
+  }
+
+  function startBlinking(cfg) {
+    stopBlinking();
+    if (!cfg.enabled) return;
+
+    function schedule() {
+      var delay = cfg.minDelay + Math.random() * Math.max(0, cfg.maxDelay - cfg.minDelay);
+      blinkTimer = setTimeout(function () { doBlink(Math.random() < cfg.doubleChance ? 1 : 0); }, delay);
+    }
+
+    function doBlink(remaining) {
+      root.setAttribute('data-blinking', 'true');
+      blinkTimer = setTimeout(function () {
+        root.setAttribute('data-blinking', 'false');
+        if (remaining > 0) {
+          blinkTimer = setTimeout(function () { doBlink(remaining - 1); }, 120);
+        } else {
+          schedule();
+        }
+      }, cfg.duration);
+    }
+
+    schedule();
+  }
+
+  function applyPreset(preset) {
+    var vars = preset.vars;
+    for (var name in vars) {
+      if (Object.prototype.hasOwnProperty.call(vars, name)) root.style.setProperty(name, vars[name]);
+    }
+    tweenAccent(preset.accent);
+  }
+
+  /* --- emotion debounce --------------------------------------------------- */
+  var lastAppliedAt = 0;
+  var pendingEmotion = null;
+  var pendingTimer = null;
+
+  /* Listeners fire only when an emotion actually lands on screen, not on every
+     request — debounced-away intermediates never happened as far as anyone
+     watching is concerned. */
+  var changeListeners = [];
+  function onChange(fn) { changeListeners.push(fn); }
+
+  function apply(name) {
+    currentEmotion = name;
+    lastAppliedAt = Date.now();
+    var preset = PRESETS[name];
+    applyPreset(preset);
+    root.setAttribute('data-emotion', name);
+    startBlinking(preset.blink);
+    for (var i = 0; i < changeListeners.length; i++) {
+      try { changeListeners[i](name); } catch (e) { console.error(e); }
+    }
+  }
+
+  function flushPending() {
+    pendingTimer = null;
+    var next = pendingEmotion;
+    pendingEmotion = null;
+    if (next !== null && next !== currentEmotion) apply(next);
+  }
+
+  function setEmotion(name) {
+    if (EMOTIONS.indexOf(name) === -1) {
+      console.warn('[Companion] unknown emotion:', name, '- ignoring');
+      return currentEmotion;
+    }
+
+    var since = Date.now() - lastAppliedAt;
+    if (since >= MIN_EMOTION_GAP_MS) {
+      if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; pendingEmotion = null; }
+      if (name !== currentEmotion) apply(name);
+      return currentEmotion;
+    }
+
+    /* Inside the guard window: remember the latest request and land it once
+       the window closes. */
+    pendingEmotion = name;
+    if (pendingTimer === null) {
+      pendingTimer = setTimeout(flushPending, MIN_EMOTION_GAP_MS - since);
+    }
+    return currentEmotion;
+  }
+
+  function current() { return currentEmotion; }
+
+  /* One-shot glow flash, for acknowledging an external trigger. */
+  var ackTimer = null;
+  function acknowledge() {
+    root.setAttribute('data-ack', 'true');
+    if (ackTimer !== null) clearTimeout(ackTimer);
+    ackTimer = setTimeout(function () {
+      ackTimer = null;
+      root.removeAttribute('data-ack');
+    }, 560);
+  }
+
+  /* --- speaking -----------------------------------------------------------
+     Driven from the audio amplitude by CompanionSpeech. Kept here so the face
+     module stays the only thing that writes face CSS variables. */
+  var MAX_TALK_OPEN_PX = 15;
+
+  function startTalking() { root.setAttribute('data-talking', 'true'); }
+
+  function setTalkLevel(level) {
+    var v = level > 0 ? (level < 1 ? level : 1) : 0;
+    root.style.setProperty('--talk-open', (v * MAX_TALK_OPEN_PX).toFixed(1) + 'px');
+  }
+
+  function stopTalking() {
+    root.removeAttribute('data-talking');
+    root.style.setProperty('--talk-open', '0px');
+  }
+
+  /* --- burn-in mitigation -------------------------------------------------
+     A static bright shape held for hours is exactly the wear pattern to
+     avoid. Every few minutes the whole face slides to a new offset inside a
+     small box; the 3s eased transition on .face-root makes it unnoticeable. */
+  var DRIFT_INTERVAL_MS = 4 * 60 * 1000;
+  var DRIFT_RANGE_PX = 6;
+
+  var stageEl = document.getElementById('stage');
+
+  function driftOnce() {
+    var x = Math.round((Math.random() * 2 - 1) * DRIFT_RANGE_PX);
+    var y = Math.round((Math.random() * 2 - 1) * DRIFT_RANGE_PX);
+    /* Set on the stage so the face and the idle readout drift together. */
+    stageEl.style.setProperty('--drift-x', x + 'px');
+    stageEl.style.setProperty('--drift-y', y + 'px');
+  }
+  setInterval(driftOnce, DRIFT_INTERVAL_MS);
+
+  /* Paint the initial pose so the DOM defaults and JS never disagree. */
+  writeAccent(accentRgb);
+  applyPreset(PRESETS.idle);
+  startBlinking(PRESETS.idle.blink);
+  lastAppliedAt = Date.now();
+
+  return {
+    setEmotion: setEmotion,
+    current: current,
+    onChange: onChange,
+    acknowledge: acknowledge,
+    startTalking: startTalking,
+    setTalkLevel: setTalkLevel,
+    stopTalking: stopTalking,
+    emotions: EMOTIONS.slice()
+  };
+})();
+
+
+/* ===========================================================================
+   SPEECH MODULE — plays synthesized replies and drives the mouth.
+   Additive: if anything here fails the reply is still shown as text.
+   ========================================================================= */
+window.CompanionSpeech = (function () {
+  'use strict';
+
+  var audio = new Audio();
+  audio.preload = 'auto';
+
+  var ctx = null;
+  var analyser = null;
+  var freqData = null;
+  var wired = false;          // MediaElementSource can only be created once
+  var rafId = null;
+  var currentUrl = null;
+
+  /* iOS will not start audio that was not initiated by a user gesture, and an
+     AudioContext starts suspended until one occurs. Both are unlocked on the
+     first touch anywhere; after that, replies can play on their own. */
+  function unlock() {
+    if (!ctx) {
+      var Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return;                       // no Web Audio: still playable
+      try { ctx = new Ctor(); } catch (e) { return; }
+    }
+    if (ctx.state === 'suspended') ctx.resume().catch(function () {});
+
+    if (!wired) {
+      try {
+        var source = ctx.createMediaElementSource(audio);
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.65;
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        wired = true;
+      } catch (e) {
+        /* Routing failed — playback still works, the mouth just falls back to
+           the synthetic pattern below. */
+        console.info('[Companion] audio analysis unavailable:', e && e.name);
+        analyser = null;
+      }
+    }
+  }
+
+  document.addEventListener('touchstart', unlock, { once: true, passive: true });
+  document.addEventListener('pointerdown', unlock, { once: true });
+
+  function animateMouth() {
+    if (analyser) {
+      analyser.getByteFrequencyData(freqData);
+      /* Average the low/mid bins only — that is where speech energy sits, and
+         including the top of the spectrum makes the mouth twitch on sibilance. */
+      var sum = 0, bins = Math.min(32, freqData.length);
+      for (var i = 0; i < bins; i++) sum += freqData[i];
+      var level = (sum / bins) / 160;
+      window.Companion.setTalkLevel(level);
+    } else {
+      /* No analyser: a gentle synthetic flutter is still better than a mouth
+         frozen open for the whole reply. */
+      window.Companion.setTalkLevel(0.35 + 0.35 * Math.abs(Math.sin(Date.now() / 90)));
+    }
+    rafId = requestAnimationFrame(animateMouth);
+  }
+
+  function stopAnimation() {
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+    window.Companion.stopTalking();
+  }
+
+  function cleanup() {
+    stopAnimation();
+    if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
+  }
+
+  audio.addEventListener('ended', cleanup);
+  audio.addEventListener('error', cleanup);
+
+  function cancel() {
+    try { audio.pause(); } catch (e) {}
+    audio.currentTime = 0;
+    cleanup();
+  }
+
+  async function speak(text) {
+    if (!window.CompanionConfig.get('voice')) return;
+    /* Never speak into a dark room. */
+    if (window.CompanionConfig.get('sleepNow')) return;
+    if (!text) return;
+
+    cancel();                                  // a new reply supersedes an old one
+
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var blob = await res.blob();
+
+      currentUrl = URL.createObjectURL(blob);
+      audio.src = currentUrl;
+      unlock();
+
+      window.Companion.startTalking();
+      await audio.play();
+      animateMouth();
+    } catch (e) {
+      /* Silence is an acceptable outcome — the bubble already has the text. */
+      console.info('[Companion] speech unavailable:', e && (e.name || e.message));
+      cleanup();
+    }
+  }
+
+  return { speak: speak, cancel: cancel, unlock: unlock };
+})();
+
+
+/* ===========================================================================
+   CHAT MODULE
+   Talks to the face only through window.Companion.
+   ========================================================================= */
+window.CompanionChat = (function () {
+  'use strict';
+
+  var THINK_AFTER_MS = 800;      // 'listen' -> 'think' if the reply is slow
+  var BUBBLE_MIN_MS = 2600;      // floor on how long a reply stays up
+  var BUBBLE_PER_CHAR_MS = 45;
+  var BUBBLE_MAX_MS = 7000;
+  var ERROR_TEXT = 'having trouble thinking right now';
+  var SSE_RETRY_MS = 3000;       // reconnect delay after a dropped stream
+
+  var toggle = document.getElementById('chatToggle');
+  var composer = document.getElementById('composer');
+  var input = document.getElementById('composerInput');
+  var sendBtn = document.getElementById('composerSend');
+  var bubble = document.getElementById('bubble');
+
+  /* In-memory only — cleared on reload, no persistence yet. */
+  var conversation = [];
+  var inFlight = false;
+  var bubbleTimer = null;
+  /* Two separate generations, deliberately.
+     sendId   guards the chat request lifecycle (which reply is still current).
+     bubbleId guards whichever bubble is on screen, whatever produced it.
+     Sharing one counter meant a pushed reminder aged out the in-flight chat
+     turn and silently swallowed its reply. */
+  var sendId = 0;
+  var bubbleId = 0;
+
+  /* Mirrored onto the stage so the bubble can move out from under the input
+     with a CSS rule instead of the two elements overlapping. */
+  var stageEl = document.getElementById('stage');
+
+  function openComposer() {
+    composer.setAttribute('data-open', 'true');
+    stageEl.setAttribute('data-composer', 'open');
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.setAttribute('aria-label', 'Close chat');
+    input.focus();
+  }
+
+  function closeComposer() {
+    composer.setAttribute('data-open', 'false');
+    stageEl.removeAttribute('data-composer');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-label', 'Open chat');
+    input.blur();
+  }
+
+  function showBubble(text, isError) {
+    if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+    var myBubble = ++bubbleId;
+    bubble.textContent = text;
+    bubble.setAttribute('data-error', isError ? 'true' : 'false');
+    bubble.setAttribute('data-visible', 'true');
+
+    var hold = Math.min(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS);
+    bubbleTimer = setTimeout(function () {
+      bubbleTimer = null;
+      if (myBubble !== bubbleId) return;     // a newer bubble already took over
+      bubble.setAttribute('data-visible', 'false');
+      window.Companion.setEmotion('idle');
+    }, hold);
+  }
+
+  function setBusy(busy) {
+    inFlight = busy;
+    input.disabled = busy;
+    sendBtn.disabled = busy;
+  }
+
+  async function send(text) {
+    var mySend = ++sendId;
+    conversation.push({ role: 'user', content: text });
+
+    /* A new turn supersedes the previous reply, so stop speaking it — this
+       covers the typed path, where there was no mic press to interrupt. */
+    window.CompanionSpeech.cancel();
+
+    setBusy(true);
+    window.Companion.setEmotion('listen');
+    var thinkTimer = setTimeout(function () {
+      if (mySend === sendId) window.Companion.setEmotion('think');
+    }, THINK_AFTER_MS);
+
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history: conversation.slice(0, -1) })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+
+      clearTimeout(thinkTimer);
+      if (mySend !== sendId) return;         // superseded while in flight
+
+      conversation.push({ role: 'assistant', content: data.reply });
+      window.Companion.setEmotion(data.emotion || 'idle');
+      showBubble(data.reply, false);
+      window.CompanionSpeech.speak(data.reply);
+    } catch (err) {
+      clearTimeout(thinkTimer);
+      console.error('[Companion] chat failed:', err);
+      if (mySend !== sendId) return;
+      /* Drop the user turn we optimistically pushed: the model never saw it,
+         so replaying it as context would misrepresent the conversation. */
+      conversation.pop();
+      window.Companion.setEmotion('sad');
+      showBubble(ERROR_TEXT, true);
+    } finally {
+      if (mySend === sendId) setBusy(false);
+    }
+  }
+
+  toggle.addEventListener('click', function () {
+    if (composer.getAttribute('data-open') === 'true') closeComposer();
+    else openComposer();
+  });
+
+  composer.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text || inFlight) return;
+    input.value = '';
+    closeComposer();                          // dismiss on submit
+    send(text);
+  });
+
+  /* --- automations: server-pushed events ---------------------------------
+     Reminders fire on the backend and arrive here over SSE. Rendering reuses
+     the chat bubble so a pushed reminder and a spoken reply look identical. */
+  var sse = null;
+  var sseRetryTimer = null;
+
+  function scheduleReconnect() {
+    if (sseRetryTimer !== null) return;       // a retry is already pending
+    sseRetryTimer = setTimeout(function () {
+      sseRetryTimer = null;
+      connectEvents();
+    }, SSE_RETRY_MS);
+  }
+
+  function connectEvents() {
+    if (sse) { try { sse.close(); } catch (e) {} sse = null; }
+
+    try {
+      sse = new EventSource(window.CompanionConfig.backendUrl() + '/events');
+    } catch (e) {
+      console.error('[Companion] could not open event stream:', e);
+      scheduleReconnect();
+      return;
+    }
+
+    sse.onmessage = function (e) {
+      var event;
+      try { event = JSON.parse(e.data); } catch (err) { return; }
+
+      if (event.type === 'reminder' || event.type === 'proactive') {
+        /* A fired reminder and an unprompted line render identically — both
+           are the companion speaking without being asked. */
+        window.Companion.setEmotion(event.emotion || 'happy');
+        showBubble(event.text, false);
+        window.CompanionSpeech.speak(event.text);
+
+      } else if (event.type === 'wake') {
+        /* External keyword spotter (ESP32) heard its wake word. Show that we
+           heard it, then start capturing without waiting for a button. */
+        window.Companion.setEmotion(event.emotion || 'listen');
+        window.Companion.acknowledge();
+        if (window.CompanionVoice) window.CompanionVoice.autoRecord();
+      }
+      /* 'connected' is a handshake only — nothing to render. */
+    };
+
+    sse.onerror = function () {
+      /* EventSource retries on its own for transient drops but gives up once
+         the connection is closed (a backend restart), so drive it explicitly
+         on a fixed 3s cadence instead of trusting the built-in behaviour. */
+      console.warn('[Companion] event stream lost, retrying in ' + SSE_RETRY_MS + 'ms');
+      if (sse) { try { sse.close(); } catch (err) {} sse = null; }
+      scheduleReconnect();
+    };
+  }
+
+  connectEvents();
+
+  /* Replay stored history so a reloaded PWA is not meeting the user for the
+     first time. Only seeds an untouched conversation — if they already typed
+     something while this was in flight, that turn wins. */
+  async function loadHistory() {
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/conversation');
+      if (!res.ok) return;
+      var data = await res.json();
+      if (conversation.length === 0 && Array.isArray(data.messages) && data.messages.length) {
+        conversation = data.messages.slice();
+        console.info('[Companion] restored ' + conversation.length + ' message(s)');
+      }
+    } catch (e) {
+      /* First run, or the backend is down — starting fresh is fine. */
+    }
+  }
+  loadHistory();
+
+  async function clearHistory() {
+    conversation = [];
+    try {
+      await fetch(window.CompanionConfig.backendUrl() + '/conversation', { method: 'DELETE' });
+    } catch (e) {
+      console.warn('[Companion] could not clear stored history:', e);
+    }
+  }
+
+  /* Pointing at a different backend must move the event stream too. */
+  window.CompanionConfig.onChange(function (key) {
+    if (key === 'backendUrl') {
+      if (sseRetryTimer !== null) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+      connectEvents();
+    }
+  });
+
+  return {
+    /* `send` is exposed so voice input can feed transcribed text through the
+       exact same path as a typed message — same history, same reply/emotion
+       flow, no parallel implementation. */
+    send: send,
+    isBusy: function () { return inFlight; },
+    showBubble: showBubble,
+    openComposer: openComposer,
+    closeComposer: closeComposer,
+    loadHistory: loadHistory,
+    clearHistory: clearHistory,
+    historyLength: function () { return conversation.length; }
+  };
+})();
+
+
+/* ===========================================================================
+   GLANCE MODULE — time and weather while the companion has nothing to say.
+   ========================================================================= */
+window.CompanionGlance = (function () {
+  'use strict';
+
+  /* Minute granularity, so a 20s tick is enough and costs nothing. A 1s
+     interval on a device that runs for days is wasted battery. */
+  var CLOCK_TICK_MS = 20000;
+  var WEATHER_REFRESH_MS = 10 * 60 * 1000;
+
+  var glance = document.getElementById('glance');
+  var timeEl = document.getElementById('glanceTime');
+  var metaEl = document.getElementById('glanceMeta');
+
+  /* Only states where the companion is passive. Anything else means it is
+     busy and the readout would be competing with it. */
+  var QUIET_EMOTIONS = { idle: true, sleepy: true };
+
+  var weather = '';
+
+  function drawClock() {
+    var now = new Date();
+    var h = now.getHours();
+    var m = now.getMinutes();
+    var suffix = h >= 12 ? 'pm' : 'am';
+    var h12 = h % 12;
+    if (h12 === 0) h12 = 12;
+    timeEl.textContent = h12 + ':' + (m < 10 ? '0' + m : m) + ' ' + suffix;
+
+    var day = now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+    metaEl.textContent = weather ? day + ' · ' + weather : day;
+  }
+
+  function updateVisibility() {
+    var quiet = QUIET_EMOTIONS[window.Companion.current()] === true;
+    var bubbleUp = document.getElementById('bubble').getAttribute('data-visible') === 'true';
+    var composerUp = document.getElementById('composer').getAttribute('data-open') === 'true';
+    glance.setAttribute('data-visible', quiet && !bubbleUp && !composerUp ? 'true' : 'false');
+  }
+
+  async function refreshWeather() {
+    var city = window.CompanionConfig.get('city');
+    if (!city) { weather = ''; drawClock(); return; }
+    try {
+      var res = await fetch(
+        window.CompanionConfig.backendUrl() + '/ambient?city=' + encodeURIComponent(city)
+      );
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      /* The backend returns null rather than an error string when it cannot
+         reach the weather API, so this just shows less. */
+      weather = data.weather || '';
+    } catch (e) {
+      weather = '';
+    }
+    drawClock();
+  }
+
+  drawClock();
+  updateVisibility();
+  setInterval(drawClock, CLOCK_TICK_MS);
+  refreshWeather();
+  setInterval(refreshWeather, WEATHER_REFRESH_MS);
+
+  /* Event-driven rather than polled: the face announces changes, and the
+     bubble and composer are watched for attribute flips. */
+  window.Companion.onChange(updateVisibility);
+  var observer = new MutationObserver(updateVisibility);
+  observer.observe(document.getElementById('bubble'), { attributes: true, attributeFilter: ['data-visible'] });
+  observer.observe(document.getElementById('composer'), { attributes: true, attributeFilter: ['data-open'] });
+
+  window.CompanionConfig.onChange(function (key) {
+    if (key === 'city' || key === 'backendUrl') refreshWeather();
+  });
+
+  return { refreshWeather: refreshWeather, redraw: drawClock, updateVisibility: updateVisibility };
+})();
+
+
+/* ===========================================================================
+   KIOSK MODULE — standalone chrome, wake lock, dim, settings, health retry.
+   ========================================================================= */
+(function () {
+  'use strict';
+
+  var HEALTH_RETRY_MS = 5000;
+  var LONG_PRESS_MS = 600;
+  var LONG_PRESS_SLOP_PX = 12;
+
+  var stage = document.getElementById('stage');
+  var dim = document.getElementById('dim');
+  var retry = document.getElementById('retry');
+  var settings = document.getElementById('settings');
+  var sheet = document.getElementById('settingsSheet');
+  var backendInput = document.getElementById('setBackend');
+  var dimRange = document.getElementById('setDim');
+  var dimValue = document.getElementById('setDimValue');
+  var sleepBtn = document.getElementById('setSleep');
+  var sleepState = document.getElementById('setSleepState');
+
+  /* --- standalone detection ----------------------------------------------
+     navigator.standalone is the iOS-specific signal for "added to home
+     screen"; display-mode covers other browsers for desktop testing. */
+  var isStandalone = window.navigator.standalone === true
+    || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  document.body.setAttribute('data-standalone', isStandalone ? 'true' : 'false');
+
+  /* --- screen wake lock ---------------------------------------------------
+     iOS Safari PWA support for the Wake Lock API is limited and inconsistent
+     — it is absent entirely before 16.4 (so unavailable on an iPhone 6s,
+     which tops out at iOS 15), and even where present a PWA can lose the lock
+     on backgrounding without firing a usable event. Treat it as a bonus, not
+     a guarantee.
+
+     MANUAL FALLBACK for a dedicated desk device, and the only reliable option
+     on an iPhone 6s:
+         Settings › Display & Brightness › Auto-Lock › Never
+     That is surfaced in the settings sheet so it is discoverable on-device. */
+  var wakeLock = null;
+
+  async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', function () { wakeLock = null; });
+    } catch (e) {
+      /* Denied, unsupported, or not user-activated. Not fatal. */
+      console.info('[Companion] wake lock unavailable:', e && e.name);
+    }
+  }
+
+  requestWakeLock();
+  document.addEventListener('visibilitychange', function () {
+    /* iOS releases the lock on backgrounding and never restores it, so it has
+       to be re-requested every time the page comes back to the foreground. */
+    if (document.visibilityState === 'visible' && wakeLock === null) requestWakeLock();
+  });
+
+  /* --- dim + sleep -------------------------------------------------------- */
+  function applyDim() {
+    var pct = window.CompanionConfig.get('dim');
+    var sleeping = window.CompanionConfig.get('sleepNow');
+    /* Sleep mode floors the dim well past the slider so the room goes dark
+       even if the slider was left at zero. */
+    var effective = sleeping ? Math.max(pct, 70) : pct;
+    dim.style.opacity = String(effective / 100);
+    dimValue.textContent = pct + '%';
+    dimRange.value = String(pct);
+  }
+
+  function applySleep() {
+    var sleeping = window.CompanionConfig.get('sleepNow');
+    sleepBtn.setAttribute('aria-pressed', sleeping ? 'true' : 'false');
+    sleepState.textContent = sleeping ? 'On' : 'Off';
+    if (sleeping) window.Companion.setEmotion('sleepy');
+    applyDim();
+  }
+
+  dimRange.addEventListener('input', function () {
+    window.CompanionConfig.set('dim', parseInt(dimRange.value, 10) || 0);
+    applyDim();
+  });
+
+  sleepBtn.addEventListener('click', function () {
+    var next = !window.CompanionConfig.get('sleepNow');
+    window.CompanionConfig.set('sleepNow', next);
+    applySleep();
+    if (next) {
+      /* Going to sleep mid-sentence should stop the sentence. */
+      window.CompanionSpeech.cancel();
+    } else {
+      window.Companion.setEmotion('idle');
+    }
+  });
+
+  /* --- voice ------------------------------------------------------------- */
+  var voiceBtn = document.getElementById('setVoice');
+  var voiceState = document.getElementById('setVoiceState');
+
+  function applyVoice() {
+    var on = window.CompanionConfig.get('voice');
+    voiceBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    voiceState.textContent = on ? 'On' : 'Off';
+  }
+
+  voiceBtn.addEventListener('click', function () {
+    var next = !window.CompanionConfig.get('voice');
+    window.CompanionConfig.set('voice', next);
+    applyVoice();
+    if (!next) window.CompanionSpeech.cancel();
+    /* Turning it on is a user gesture — use it to unlock audio now, rather
+       than having the first reply fail iOS's autoplay check. */
+    else window.CompanionSpeech.unlock();
+  });
+
+  /* --- forget conversation ------------------------------------------------ */
+  var forgetBtn = document.getElementById('setForget');
+  var forgetState = document.getElementById('setForgetState');
+
+  forgetBtn.addEventListener('click', async function () {
+    forgetState.textContent = 'clearing…';
+    await window.CompanionChat.clearHistory();
+    forgetState.textContent = 'cleared';
+    setTimeout(function () { forgetState.textContent = '—'; }, 2000);
+  });
+
+  /* --- backend url -------------------------------------------------------- */
+  backendInput.value = window.CompanionConfig.get('backendUrl');
+  backendInput.addEventListener('change', function () {
+    var value = backendInput.value.trim();
+    if (!value) { backendInput.value = window.CompanionConfig.get('backendUrl'); return; }
+    window.CompanionConfig.set('backendUrl', value);
+    checkHealth();                            // re-probe the new target at once
+  });
+
+  /* --- weather city ------------------------------------------------------- */
+  var cityInput = document.getElementById('setCity');
+  cityInput.value = window.CompanionConfig.get('city');
+  cityInput.addEventListener('change', function () {
+    window.CompanionConfig.set('city', cityInput.value.trim());
+  });
+
+  /* --- inspectable lists: reminders and memory ---------------------------- */
+  var remindersList = document.getElementById('remindersList');
+  var remindersCount = document.getElementById('remindersCount');
+  var factsList = document.getElementById('factsList');
+  var factsCount = document.getElementById('factsCount');
+
+  function renderRows(listEl, countEl, items, emptyText, buildRow) {
+    listEl.textContent = '';
+    countEl.textContent = items.length ? String(items.length) : 'none';
+    if (!items.length) {
+      var empty = document.createElement('li');
+      empty.className = 'rows__empty';
+      empty.textContent = emptyText;
+      listEl.appendChild(empty);
+      return;
+    }
+    items.forEach(function (item) { listEl.appendChild(buildRow(item)); });
+  }
+
+  function makeRow(text, subtitle, onRemove) {
+    var li = document.createElement('li');
+    li.className = 'row';
+
+    var span = document.createElement('span');
+    span.className = 'row__text';
+    /* textContent, never innerHTML: this is model-authored text. */
+    span.textContent = text;
+    if (subtitle) {
+      var when = document.createElement('span');
+      when.className = 'row__when';
+      when.textContent = subtitle;
+      span.appendChild(when);
+    }
+
+    var btn = document.createElement('button');
+    btn.className = 'row__x';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Remove');
+    btn.textContent = '×';
+    btn.addEventListener('click', onRemove);
+
+    li.appendChild(span);
+    li.appendChild(btn);
+    return li;
+  }
+
+  function formatWhen(epochSeconds) {
+    var d = new Date(epochSeconds * 1000);
+    var today = new Date();
+    var time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (d.toDateString() === today.toDateString()) return time;
+    return d.toLocaleDateString(undefined, { weekday: 'short' }) + ' ' + time;
+  }
+
+  async function loadReminders() {
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/reminders');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      renderRows(remindersList, remindersCount, data.reminders, 'Nothing scheduled.', function (r) {
+        return makeRow(r.text, formatWhen(r.fire_time), async function () {
+          await fetch(window.CompanionConfig.backendUrl() + '/reminders/' + r.id, { method: 'DELETE' });
+          loadReminders();
+        });
+      });
+    } catch (e) {
+      renderRows(remindersList, remindersCount, [], 'Backend unreachable.', function () {});
+    }
+  }
+
+  async function loadFacts() {
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/facts');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      renderRows(factsList, factsCount, data.facts, 'Nothing remembered yet.', function (f) {
+        return makeRow(f.text, '', async function () {
+          await fetch(window.CompanionConfig.backendUrl() + '/facts/' + f.id, { method: 'DELETE' });
+          loadFacts();
+        });
+      });
+    } catch (e) {
+      renderRows(factsList, factsCount, [], 'Backend unreachable.', function () {});
+    }
+  }
+
+  /* --- settings open/close ------------------------------------------------ */
+  function openSettings() {
+    settings.setAttribute('data-open', 'true');
+    backendInput.value = window.CompanionConfig.get('backendUrl');
+    cityInput.value = window.CompanionConfig.get('city');
+    applyDim();
+    /* Fetched on open rather than kept live: this panel is looked at rarely,
+       and polling it would be pure background traffic. */
+    loadReminders();
+    loadFacts();
+  }
+  function closeSettings() {
+    settings.setAttribute('data-open', 'false');
+    backendInput.blur();
+  }
+
+  /* Tap outside the sheet dismisses. */
+  settings.addEventListener('click', function (e) {
+    if (!sheet.contains(e.target)) closeSettings();
+  });
+
+  /* --- long-press anywhere to reveal settings -----------------------------
+     Pointer events where available, touch as the iOS fallback. Movement
+     beyond a small slop cancels, so a scroll or a swipe never opens it. */
+  var pressTimer = null;
+  var pressStart = null;
+
+  function beginPress(x, y, target) {
+    /* Never hijack a press that starts on an interactive control. */
+    if (target && target.closest && target.closest('button, input, .settings')) return;
+    pressStart = { x: x, y: y };
+    pressTimer = setTimeout(function () {
+      pressTimer = null;
+      openSettings();
+    }, LONG_PRESS_MS);
+  }
+
+  function movePress(x, y) {
+    if (pressTimer === null || pressStart === null) return;
+    if (Math.abs(x - pressStart.x) > LONG_PRESS_SLOP_PX ||
+        Math.abs(y - pressStart.y) > LONG_PRESS_SLOP_PX) endPress();
+  }
+
+  function endPress() {
+    /* A timer still pending means the press ended before the long-press
+       threshold — that is a tap, and in standalone a tap is how the dock is
+       summoned back. */
+    var wasTap = pressTimer !== null;
+    if (pressTimer !== null) { clearTimeout(pressTimer); pressTimer = null; }
+    pressStart = null;
+    if (wasTap && settings.getAttribute('data-open') !== 'true') revealDock();
+  }
+
+  /* Reads the body attribute rather than the boolean captured at load, so the
+     CSS rules and this logic can never disagree about which mode is active. */
+  function standaloneNow() {
+    return document.body.getAttribute('data-standalone') === 'true';
+  }
+
+  /* --- standalone dock reveal --------------------------------------------- */
+  var DOCK_REVEAL_MS = 6000;
+  var dock = document.getElementById('dock');
+  var dockHideTimer = null;
+
+  function revealDock() {
+    if (!standaloneNow()) return;      // in a browser tab the dock is always up
+    dock.setAttribute('data-revealed', 'true');
+    if (dockHideTimer !== null) clearTimeout(dockHideTimer);
+    dockHideTimer = setTimeout(function () {
+      dockHideTimer = null;
+      /* Never yank the controls away mid-interaction. */
+      if (window.CompanionVoice && window.CompanionVoice.isRecording()) { revealDock(); return; }
+      if (composerIsOpen()) { revealDock(); return; }
+      dock.removeAttribute('data-revealed');
+    }, DOCK_REVEAL_MS);
+  }
+
+  function composerIsOpen() {
+    return document.getElementById('composer').getAttribute('data-open') === 'true';
+  }
+
+  /* Using the dock keeps it up. */
+  dock.addEventListener('pointerdown', revealDock);
+
+  if (window.PointerEvent) {
+    stage.addEventListener('pointerdown', function (e) { beginPress(e.clientX, e.clientY, e.target); });
+    stage.addEventListener('pointermove', function (e) { movePress(e.clientX, e.clientY); });
+    stage.addEventListener('pointerup', endPress);
+    stage.addEventListener('pointercancel', endPress);
+  } else {
+    stage.addEventListener('touchstart', function (e) {
+      var t = e.touches[0];
+      if (t) beginPress(t.clientX, t.clientY, e.target);
+    }, { passive: true });
+    stage.addEventListener('touchmove', function (e) {
+      var t = e.touches[0];
+      if (t) movePress(t.clientX, t.clientY);
+    }, { passive: true });
+    stage.addEventListener('touchend', endPress);
+    stage.addEventListener('touchcancel', endPress);
+  }
+
+  /* Suppress the iOS text-selection callout on a long press over the face. */
+  stage.addEventListener('contextmenu', function (e) {
+    if (!e.target.closest('input')) e.preventDefault();
+  });
+
+  /* --- backend reachability ----------------------------------------------
+     On a cold start with the backend down the face should say so rather than
+     sit there looking content. Retries every 5s until it answers. */
+  var healthTimer = null;
+  var healthy = null;                          // null = not yet determined
+
+  function showRetry(visible, text) {
+    retry.setAttribute('data-visible', visible ? 'true' : 'false');
+    if (text) document.getElementById('retryText').textContent = text;
+  }
+
+  async function checkHealth() {
+    if (healthTimer !== null) { clearTimeout(healthTimer); healthTimer = null; }
+    var ok = false;
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/health', { cache: 'no-store' });
+      ok = res.ok;
+    } catch (e) {
+      ok = false;
+    }
+
+    if (ok) {
+      if (healthy !== true) {
+        showRetry(false);
+        /* Don't stomp sleep mode just because the backend came back. */
+        if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      }
+      healthy = true;
+      return;
+    }
+
+    if (healthy !== false) {
+      showRetry(true, 'can’t reach the backend');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
+    }
+    healthy = false;
+    healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+  }
+
+  /* --- on-screen keyboard -------------------------------------------------
+     iOS shrinks the visual viewport rather than the layout viewport when the
+     keyboard appears. Because the stage is a fixed 667px box with overflow
+     hidden, Safari cannot scroll the focused input into view — it would end
+     up behind the keyboard. Measuring the covered height and exposing it as
+     --kb lets the composer and bubble lift above it in CSS.
+
+     visualViewport landed in iOS 13; a 6s can run 15, so this is available.
+     Where it is not, --kb stays unset and everything sits where it did. */
+  if (window.visualViewport) {
+    var vv = window.visualViewport;
+    var applyKeyboardInset = function () {
+      var covered = window.innerHeight - vv.height - vv.offsetTop;
+      /* Small negative values show up from rounding and rubber-banding. */
+      stage.style.setProperty('--kb', (covered > 8 ? Math.round(covered) : 0) + 'px');
+    };
+    vv.addEventListener('resize', applyKeyboardInset);
+    vv.addEventListener('scroll', applyKeyboardInset);
+    applyKeyboardInset();
+  }
+
+  /* --- service worker -----------------------------------------------------
+     Caches the shell so a network blip shows the face instead of a browser
+     error page. Requires a secure context: over plain http:// from a LAN IP
+     — the normal setup here — registration is refused and this quietly does
+     nothing. Serve over HTTPS (or localhost) to actually get it. */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').then(function () {
+        console.info('[Companion] service worker registered');
+      }).catch(function (e) {
+        console.info('[Companion] service worker not registered:', e && e.message);
+      });
+    });
+  }
+
+  /* --- boot --------------------------------------------------------------- */
+  applySleep();
+  applyVoice();
+  checkHealth();
+
+  /* Exposed for the settings gesture to be testable and for later layers. */
+  window.CompanionKiosk = {
+    openSettings: openSettings,
+    closeSettings: closeSettings,
+    checkHealth: checkHealth,
+    loadReminders: loadReminders,
+    loadFacts: loadFacts,
+    isStandalone: isStandalone
+  };
+})();
+
+
+/* ===========================================================================
+   VOICE MODULE — press-and-hold to talk.
+   Records with MediaRecorder, transcribes via POST /transcribe, then hands
+   the text to CompanionChat.send() so the reply path is identical to typing.
+   Degrades to text-only on any failure; never throws into the UI.
+   ========================================================================= */
+window.CompanionVoice = (function () {
+  'use strict';
+
+  var MAX_RECORD_MS = 15000;   // safety cutoff
+  var MIN_RECORD_MS = 250;     // below this it was a mis-tap, not speech
+  /* Window for a hands-free take started by the wake trigger. There is no
+     button release to end it, and waiting out the full 15s cutoff before
+     giving up on silence would feel broken — a spoken command fits in six
+     seconds, and the 15s ceiling still applies as the outer bound. */
+  var AUTO_RECORD_MS = 6000;
+
+  var micBtn = document.getElementById('micBtn');
+  var micPrompt = document.getElementById('micPrompt');
+  var micAllow = document.getElementById('micAllow');
+  var micDeny = document.getElementById('micDeny');
+
+  var supported = typeof window.MediaRecorder !== 'undefined'
+    && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+  var recorder = null;
+  var stream = null;
+  var chunks = [];
+  var startedAt = 0;
+  var stopTimer = null;
+  var autoStopTimer = null;
+  var recording = false;
+  var granted = false;
+  /* Set once the user has seen the explanation, so it appears only once. */
+  var explained = false;
+
+  function disableVoice(reason) {
+    console.info('[Companion] voice unavailable:', reason);
+    micBtn.hidden = true;
+    recording = false;
+    micBtn.setAttribute('data-recording', 'false');
+  }
+
+  if (!supported) disableVoice('MediaRecorder or getUserMedia missing');
+
+  /* iOS Safari only emits MP4/AAC; everything else prefers WebM/Opus. Both
+     decode server-side through PyAV, so whichever the browser offers is fine. */
+  function pickMimeType() {
+    var candidates = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+    if (!window.MediaRecorder || !window.MediaRecorder.isTypeSupported) return '';
+    for (var i = 0; i < candidates.length; i++) {
+      if (window.MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+    }
+    return '';
+  }
+
+  function releaseStream() {
+    if (stream) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null;
+    }
+  }
+
+  async function acquireStream() {
+    /* Acquired per press and released on stop, rather than held open. A
+       permanently open stream keeps iOS's recording indicator lit for as long
+       as the device is on, which is wrong for something sitting on a desk.
+       The cost is ~100-300ms of startup, which the natural pause after
+       pressing a button covers. */
+    return navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  }
+
+  async function beginRecording() {
+    if (!supported || recording || window.CompanionChat.isBusy()) return;
+
+    /* Barge-in: reaching for the mic means "stop, listen to me". Without this
+       it keeps talking over you, and the open mic records its own voice.
+       Before the consent gate on purpose — a press should silence it even on
+       the first one, when the permission card is what comes up. */
+    window.CompanionSpeech.cancel();
+
+    if (!granted && !explained) { micPrompt.setAttribute('data-open', 'true'); return; }
+
+    recording = true;
+    micBtn.setAttribute('data-recording', 'true');
+    window.Companion.setEmotion('listen');
+
+    try {
+      stream = await acquireStream();
+      granted = true;
+    } catch (e) {
+      recording = false;
+      micBtn.setAttribute('data-recording', 'false');
+      window.Companion.setEmotion('idle');
+      /* NotAllowedError is a deliberate refusal: stop offering the button. */
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
+        disableVoice('permission denied');
+        window.CompanionChat.showBubble('mic is off — you can still type', false);
+      } else {
+        console.error('[Companion] mic error:', e);
+        window.CompanionChat.showBubble('could not reach the mic', true);
+      }
+      return;
+    }
+
+    /* The press may have ended while getUserMedia was still resolving. */
+    if (!recording) { releaseStream(); return; }
+
+    chunks = [];
+    var mimeType = pickMimeType();
+    try {
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType: mimeType })
+                          : new MediaRecorder(stream);
+    } catch (e) {
+      console.error('[Companion] MediaRecorder failed:', e);
+      releaseStream();
+      recording = false;
+      micBtn.setAttribute('data-recording', 'false');
+      window.Companion.setEmotion('idle');
+      disableVoice('MediaRecorder construction failed');
+      return;
+    }
+
+    recorder.ondataavailable = function (e) {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = function () {
+      var type = recorder && recorder.mimeType ? recorder.mimeType : 'audio/webm';
+      var blob = new Blob(chunks, { type: type });
+      chunks = [];
+      releaseStream();
+      handleClip(blob, Date.now() - startedAt);
+    };
+
+    startedAt = Date.now();
+    recorder.start();
+    stopTimer = setTimeout(function () { stopTimer = null; endRecording(); }, MAX_RECORD_MS);
+  }
+
+  /* Hands-free take, started by a wake event rather than a button press. */
+  async function autoRecord() {
+    if (!supported || recording || window.CompanionChat.isBusy()) return;
+
+    if (!granted) {
+      /* iOS will not open the mic without a prior user gesture, and an SSE
+         event is not one. Ask for the one-time tap instead of failing mutely. */
+      window.CompanionChat.showBubble('tap the mic once to enable voice', false);
+      return;
+    }
+
+    await beginRecording();
+    if (!recording) return;                 // start failed; already handled
+
+    if (autoStopTimer !== null) clearTimeout(autoStopTimer);
+    autoStopTimer = setTimeout(function () {
+      autoStopTimer = null;
+      endRecording();
+    }, AUTO_RECORD_MS);
+  }
+
+  function endRecording() {
+    if (!recording) return;
+    recording = false;
+    micBtn.setAttribute('data-recording', 'false');
+    if (stopTimer !== null) { clearTimeout(stopTimer); stopTimer = null; }
+    if (autoStopTimer !== null) { clearTimeout(autoStopTimer); autoStopTimer = null; }
+
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();                      // onstop drives the rest
+    } else {
+      /* Released before the recorder ever started. */
+      releaseStream();
+      window.Companion.setEmotion('idle');
+    }
+  }
+
+  async function handleClip(blob, durationMs) {
+    if (durationMs < MIN_RECORD_MS || blob.size === 0) {
+      window.Companion.setEmotion('idle');
+      return;
+    }
+
+    window.Companion.setEmotion('think');
+
+    var form = new FormData();
+    /* Extension is cosmetic — the server sniffs the container — but it keeps
+       the upload readable in logs. */
+    var ext = blob.type.indexOf('mp4') !== -1 ? 'm4a' : 'webm';
+    form.append('audio', blob, 'clip.' + ext);
+
+    var text = '';
+    try {
+      var res = await fetch(window.CompanionConfig.backendUrl() + '/transcribe', {
+        method: 'POST',
+        body: form
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      text = (data.text || '').trim();
+    } catch (e) {
+      console.error('[Companion] transcription failed:', e);
+      window.Companion.setEmotion('sad');
+      window.CompanionChat.showBubble('did not catch that', true);
+      return;
+    }
+
+    if (!text) {
+      /* Silence is not an error: just settle back. */
+      window.Companion.setEmotion('idle');
+      return;
+    }
+
+    window.CompanionChat.send(text);
+  }
+
+  /* --- consent prompt ----------------------------------------------------- */
+  micAllow.addEventListener('click', function () {
+    explained = true;
+    micPrompt.setAttribute('data-open', 'false');
+    /* This click IS the user gesture iOS requires, so ask for the stream now
+       rather than waiting for the next press. */
+    acquireStream().then(function (s) {
+      granted = true;
+      s.getTracks().forEach(function (t) { t.stop(); });
+      window.CompanionChat.showBubble('hold the mic button to talk', false);
+    }).catch(function (e) {
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
+        disableVoice('permission denied at prompt');
+        window.CompanionChat.showBubble('mic is off — you can still type', false);
+      } else {
+        console.error('[Companion] mic error:', e);
+      }
+    });
+  });
+
+  micDeny.addEventListener('click', function () {
+    explained = true;                        // don't nag on every press
+    micPrompt.setAttribute('data-open', 'false');
+  });
+
+  /* --- press and hold ----------------------------------------------------- */
+  if (window.PointerEvent) {
+    micBtn.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      beginRecording();
+    });
+    /* Release, cancel and pointer-leave all end the take: a finger sliding off
+       the button must not leave it recording forever. */
+    micBtn.addEventListener('pointerup', endRecording);
+    micBtn.addEventListener('pointercancel', endRecording);
+    micBtn.addEventListener('pointerleave', endRecording);
+  } else {
+    micBtn.addEventListener('touchstart', function (e) {
+      e.preventDefault();
+      beginRecording();
+    }, { passive: false });
+    micBtn.addEventListener('touchend', endRecording);
+    micBtn.addEventListener('touchcancel', endRecording);
+  }
+
+  return {
+    isSupported: function () { return supported; },
+    isRecording: function () { return recording; },
+    beginRecording: beginRecording,
+    endRecording: endRecording,
+    autoRecord: autoRecord
+  };
+})();
+</script>
+</body>
+</html>
