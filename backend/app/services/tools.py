@@ -9,6 +9,7 @@ A tool NEVER raises to the caller. Failures come back as a string starting with
 in its own words rather than have the request 500.
 """
 
+import asyncio
 import inspect
 import logging
 import ssl
@@ -87,6 +88,7 @@ def render_tool_schemas() -> list[dict]:
                             key: {
                                 "type": spec.get("type", "string"),
                                 "description": spec.get("description", ""),
+                                **({"enum": spec["enum"]} if "enum" in spec else {}),
                             }
                             for key, spec in tool.parameters.items()
                         },
@@ -105,7 +107,8 @@ def render_tool_specs() -> str:
         if tool.parameters:
             params = ", ".join(
                 f'"{key}": {spec.get("type", "string")}'
-                f'{"" if key in tool.required else " (optional)"}'
+                + (f' [{"/".join(spec["enum"])}]' if "enum" in spec else "")
+                + ("" if key in tool.required else " (optional)")
                 for key, spec in tool.parameters.items()
             )
             arg_hint = "{" + params + "}"
@@ -482,6 +485,7 @@ def _register_pc_tools() -> None:
                 "action": {
                     "type": "string",
                     "description": "One of: play_pause, next, previous, stop",
+                    "enum": list(pc_control.MEDIA_KEYS),
                 }
             },
             required=["action"],
@@ -518,7 +522,10 @@ def _register_pc_tools() -> None:
     register(
         Tool(
             name="set_mute",
-            description="Mute or unmute the PC's sound.",
+            description=(
+                "Immediately mute or unmute the PC's sound by calling this tool. Saying "
+                "'muted' in a reply does not mute anything — only this call does."
+            ),
             parameters={"muted": {"type": "boolean", "description": "true to mute, false to unmute"}},
             required=["muted"],
             func=_mute,
@@ -562,10 +569,259 @@ def _register_pc_tools() -> None:
         )
     )
 
-    logger.info("PC control tools registered (media, volume, mute, lock)")
+    async def _get_now_playing() -> str:
+        try:
+            track = await pc_control.now_playing()
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        if track is None:
+            return "Nothing is currently playing."
+        status = track["status"]
+        who = f"{track['title']} by {track['artist']}" if track["artist"] else track["title"]
+        if not who.strip():
+            return f"Something is {status}, but no track info is available."
+        return f"{who} is {status}."
+
+    register(
+        Tool(
+            name="get_now_playing",
+            description="Check what track, if anything, is currently playing on the PC — title, artist and app.",
+            parameters={},
+            required=[],
+            func=_get_now_playing,
+        )
+    )
+
+    async def _stats() -> str:
+        try:
+            # system_stats() samples CPU load over a blocking 0.3s window;
+            # off the event loop so it doesn't stall every other in-flight
+            # request (including SSE keepalives) for the duration.
+            s = await asyncio.to_thread(pc_control.system_stats)
+        except Exception as e:
+            return f"ERROR: could not read system stats ({e})"
+        parts = [f"CPU {round(s['cpu_percent'])}%", f"RAM {round(s['ram_percent'])}%"]
+        if s["battery_percent"] is not None:
+            plugged = " (charging)" if s["battery_plugged"] else ""
+            parts.append(f"battery {s['battery_percent']}%{plugged}")
+        return ", ".join(parts) + "."
+
+    register(
+        Tool(
+            name="get_system_stats",
+            description="Check the PC's CPU load, RAM usage, and battery level if it has one.",
+            parameters={},
+            required=[],
+            func=_stats,
+        )
+    )
+
+    if settings.pc_app_whitelist:
+
+        def _launch(name: str) -> str:
+            name = (name or "").strip().lower()
+            path = settings.pc_app_whitelist.get(name)
+            if path is None:
+                known = ", ".join(sorted(settings.pc_app_whitelist)) or "none configured"
+                return f"ERROR: '{name}' is not in the app whitelist. Known: {known}"
+            try:
+                pc_control.launch_app(path)
+            except pc_control.PCControlError as e:
+                return f"ERROR: {e}"
+            return f"Launched {name}."
+
+        register(
+            Tool(
+                name="launch_app",
+                description=(
+                    "Open an application on the PC by name, from a fixed list the user has "
+                    "already approved. Never invent a name that isn't in the list."
+                ),
+                parameters={
+                    "name": {
+                        "type": "string",
+                        "description": "One of: " + ", ".join(sorted(settings.pc_app_whitelist)),
+                    }
+                },
+                required=["name"],
+                func=_launch,
+            )
+        )
+
+    if settings.pc_power_control_enabled:
+
+        def _power(action: str, confirm: bool = False) -> str:
+            action = (action or "").strip().lower()
+            if action not in ("sleep", "shutdown"):
+                return f"ERROR: unknown power action '{action}'. Use: sleep, shutdown"
+
+            confirmed = confirm if isinstance(confirm, bool) else str(confirm).strip().lower() in ("true", "1", "yes")
+            if not confirmed:
+                # Not an error: this is the expected first call. The model is
+                # meant to read this as "ask them, then call me again."
+                return (
+                    f"NEEDS CONFIRMATION: ask the user to confirm they want to {action} "
+                    f"the PC. Only call {('power_action')} again with confirm=true after "
+                    "they clearly say yes."
+                )
+
+            try:
+                if action == "sleep":
+                    pc_control.sleep_pc()
+                    return "PC is going to sleep."
+                pc_control.shutdown_pc(settings.pc_shutdown_delay_seconds)
+                return (
+                    f"Shutting down in {settings.pc_shutdown_delay_seconds} seconds. "
+                    "Tell them to save anything open now."
+                )
+            except pc_control.PCControlError as e:
+                return f"ERROR: {e}"
+
+        register(
+            Tool(
+                name="power_action",
+                description=(
+                    "Sleep or shut down the PC. This is the riskiest action available — ALWAYS "
+                    "ask the user to confirm in plain words first, then call this again with "
+                    "confirm=true only once they clearly say yes. Never set confirm=true on the "
+                    "first call."
+                ),
+                parameters={
+                    "action": {"type": "string", "description": "sleep or shutdown", "enum": ["sleep", "shutdown"]},
+                    "confirm": {"type": "boolean", "description": "true only after the user has explicitly confirmed"},
+                },
+                required=["action"],
+                func=_power,
+            )
+        )
+
+        def _cancel_power() -> str:
+            try:
+                pc_control.cancel_shutdown()
+            except pc_control.PCControlError as e:
+                return f"ERROR: {e}"
+            return "Cancelled the pending shutdown, if there was one."
+
+        register(
+            Tool(
+                name="cancel_shutdown",
+                description=(
+                    "Abort a shutdown that power_action already scheduled, during its warning "
+                    "delay. Use immediately if the user changes their mind or says stop/cancel "
+                    "after confirming a shutdown. Safe to call even if nothing is pending — "
+                    "does nothing to sleep, which happens instantly and cannot be cancelled."
+                ),
+                parameters={},
+                required=[],
+                func=_cancel_power,
+            )
+        )
+
+    logger.info(
+        "PC control tools registered (media, volume, mute, lock, now-playing, stats%s%s)",
+        ", launch" if settings.pc_app_whitelist else "",
+        ", power, cancel-shutdown" if settings.pc_power_control_enabled else "",
+    )
 
 
 _register_pc_tools()
+
+
+# --- smart home (Home Assistant) -----------------------------------------------
+# Only two tools on purpose: list what exists, and turn something on or off.
+# Matching a spoken name to a device follows the same shape as reminders and
+# facts — list, then substring-match in either direction — rather than
+# expecting the model to know or invent an entity_id.
+
+
+def _find_devices(devices: list[dict], name: str) -> list[dict]:
+    needle = (name or "").strip().lower()
+    if not needle:
+        return []
+    matches = []
+    for device in devices:
+        haystack = device["name"].lower()
+        if needle in haystack or haystack in needle:
+            matches.append(device)
+    return matches
+
+
+def _format_device(device: dict) -> str:
+    return f"{device['name']} ({device['state']})"
+
+
+def _register_smart_home_tools() -> None:
+    from app.config import settings
+    from app.services import home_assistant as ha
+
+    if not settings.ha_enabled:
+        logger.info("Smart home tools disabled by config")
+        return
+    if not settings.ha_token:
+        logger.info("Smart home tools skipped: no HA_TOKEN configured")
+        return
+
+    async def _list_devices() -> str:
+        try:
+            devices = await ha.list_devices()
+        except ha.HomeAssistantError as e:
+            return f"ERROR: {e}"
+        if not devices:
+            return "No smart home devices found."
+        return "Devices:\n" + "\n".join(_format_device(d) for d in devices)
+
+    register(
+        Tool(
+            name="list_smart_devices",
+            description="List the smart home lights and switches, and whether each is on or off.",
+            parameters={},
+            required=[],
+            func=_list_devices,
+        )
+    )
+
+    async def _control_device(name: str, turn_on: bool) -> str:
+        try:
+            devices = await ha.list_devices()
+        except ha.HomeAssistantError as e:
+            return f"ERROR: {e}"
+
+        matches = _find_devices(devices, name)
+        if not matches:
+            known = ", ".join(d["name"] for d in devices) or "none configured"
+            return f"ERROR: no device matching '{name}'. Known devices: {known}"
+        if len(matches) > 1:
+            listed = "\n".join(_format_device(d) for d in matches)
+            return f"Several devices match '{name}'. Ask which one:\n{listed}"
+
+        device = matches[0]
+        flag = turn_on if isinstance(turn_on, bool) else str(turn_on).strip().lower() in ("true", "1", "yes")
+        try:
+            await ha.set_state(device["entity_id"], flag)
+        except ha.HomeAssistantError as e:
+            return f"ERROR: {e}"
+        return f"{device['name']} turned {'on' if flag else 'off'}."
+
+    register(
+        Tool(
+            name="control_smart_device",
+            description=(
+                "Turn a smart home light or switch on or off, by roughly what it's called. "
+                "Use list_smart_devices first if you're not sure of the exact name."
+            ),
+            parameters={
+                "name": {"type": "string", "description": "Roughly what the device is called"},
+                "turn_on": {"type": "boolean", "description": "true to turn on, false to turn off"},
+            },
+            required=["name", "turn_on"],
+            func=_control_device,
+        )
+    )
+
+    logger.info("Smart home tools registered (list, control)")
+
+
+_register_smart_home_tools()
 
 
 __all__ = ["Tool", "execute", "render_tool_specs", "all_tools", "get", "register", "MAX_FACTS"]

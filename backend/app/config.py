@@ -102,6 +102,36 @@ class Settings(BaseSettings):
     # the tools do not register on other platforms regardless of this flag.
     pc_control_enabled: bool = Field(True, validation_alias="PC_CONTROL_ENABLED")
 
+    # Sleep and shutdown are gated behind a spoken confirmation turn: the tool
+    # refuses to act unless called with confirm=true, and the prompt instructs
+    # the model to always ask first and only pass confirm=true after the user
+    # clearly says yes. A wrong fire here costs unsaved work, not a moment's
+    # annoyance, which is a different trust level than volume or lock.
+    pc_power_control_enabled: bool = Field(True, validation_alias="PC_POWER_CONTROL_ENABLED")
+    # Seconds of warning before an actual Windows shutdown, giving a moment to
+    # run `shutdown /a` by hand if something is badly wrong.
+    pc_shutdown_delay_seconds: int = Field(10, validation_alias="PC_SHUTDOWN_DELAY_SECONDS")
+
+    # App launching. name -> path/command, e.g. {"spotify": "spotify:", "vscode": "code"}.
+    # The model only ever sees the names here — never a filesystem path it
+    # could invent — so this is a whitelist, not a general "open X" tool.
+    # JSON object in the env var, matching the shape of CORS_ORIGINS below.
+    pc_app_whitelist: dict[str, str] = Field(default_factory=dict, validation_alias="PC_APP_WHITELIST")
+
+    # Smart home, via Home Assistant rather than any device brand directly.
+    # HA already speaks local network to TP-Link Kasa/Tapo (and most other
+    # brands) with no cloud round-trip, so this backend only ever needs to
+    # know HA's own REST API — one integration point regardless of what
+    # devices are actually behind it.
+    ha_enabled: bool = Field(False, validation_alias="HA_ENABLED")
+    ha_base_url: str = Field("http://localhost:8123", validation_alias="HA_BASE_URL")
+    # Long-lived access token, created in HA under Profile -> Security ->
+    # Long-Lived Access Tokens. Not the same kind of secret as
+    # COMPANION_TOKEN — this one authenticates FROM this backend TO Home
+    # Assistant, the reverse direction.
+    ha_token: str = Field("", validation_alias="HA_TOKEN")
+    ha_request_timeout: float = Field(8.0, validation_alias="HA_REQUEST_TIMEOUT")
+
     # Shared secret required by every endpoint except /health.
     #
     # MUST be set now that tools can act on the machine. Until PC control

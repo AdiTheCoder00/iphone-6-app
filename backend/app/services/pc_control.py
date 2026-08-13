@@ -16,6 +16,7 @@ music pauses or the screen locks.
 
 import ctypes
 import logging
+import subprocess
 import sys
 
 logger = logging.getLogger(__name__)
@@ -112,3 +113,114 @@ def lock_screen() -> None:
     if not ctypes.windll.user32.LockWorkStation():
         # Fails when a screensaver/secure desktop already has the session.
         raise PCControlError("Windows refused the lock request")
+
+
+# --- now playing ------------------------------------------------------------
+# Winsdk enum values for GlobalSystemMediaTransportControlsSessionPlaybackStatus.
+# Not exposed as friendly names by the binding, so mapped by hand.
+_PLAYBACK_STATUS = {0: "closed", 1: "opened", 2: "changing", 3: "stopped", 4: "playing", 5: "paused"}
+
+
+async def now_playing() -> dict | None:
+    """The track the OS thinks is currently active, if any.
+
+    Reads the same System Media Transport Controls session Windows' own
+    volume flyout mini-player reads — so it reflects whatever app currently
+    holds media focus (Spotify, a browser tab, VLC), with no per-app
+    integration. Returns None when nothing is active, which is a normal
+    outcome, not a failure.
+    """
+    _require_windows()
+    import winsdk.windows.media.control as wmc
+
+    manager = await wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+    session = manager.get_current_session()
+    if session is None:
+        return None
+
+    info = await session.try_get_media_properties_async()
+    playback = session.get_playback_info()
+    return {
+        "title": info.title or "",
+        "artist": info.artist or "",
+        "app": session.source_app_user_model_id or "",
+        "status": _PLAYBACK_STATUS.get(playback.playback_status, "unknown"),
+    }
+
+
+# --- system stats -------------------------------------------------------------
+# Cross-platform via psutil, unlike everything else in this module — kept here
+# rather than a separate file since it is still "read the state of this
+# machine," the same job as get_volume.
+
+
+def system_stats() -> dict:
+    import psutil
+
+    battery = psutil.sensors_battery()
+    return {
+        "cpu_percent": psutil.cpu_percent(interval=0.3),
+        "ram_percent": psutil.virtual_memory().percent,
+        "battery_percent": round(battery.percent) if battery else None,
+        "battery_plugged": battery.power_plugged if battery else None,
+    }
+
+
+# --- app launching ------------------------------------------------------------
+# A fixed name -> path map from config, not a free-form path argument. The
+# model never sees or invents a filesystem path; it only ever picks a name
+# the user already approved in .env.
+
+
+def launch_app(path: str) -> None:
+    _require_windows()
+    try:
+        os_startfile(path)
+    except OSError as e:
+        raise PCControlError(f"could not launch it ({e})") from e
+
+
+def os_startfile(path: str) -> None:
+    # A thin wrapper so tests can monkeypatch this one function rather than
+    # the os module itself.
+    import os
+
+    os.startfile(path)  # noqa: S606 - path comes only from a config whitelist
+
+
+# --- power --------------------------------------------------------------------
+# Both go through the real Windows shutdown mechanism (no /f force flag), so
+# apps get their normal chance to prompt for unsaved work rather than being
+# killed outright. The confirmation gate lives in tools.py, one level up —
+# these two are the actions themselves, executed only once that gate passes.
+
+
+def sleep_pc() -> None:
+    _require_windows()
+    # SetSuspendState via rundll32 is the standard scripted-sleep incantation;
+    # the ctypes powrprof binding is far fussier about argument marshalling
+    # for comparatively little benefit here.
+    result = subprocess.run(
+        ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise PCControlError(f"Windows refused to sleep (exit {result.returncode})")
+
+
+def shutdown_pc(delay_seconds: int = 5) -> None:
+    _require_windows()
+    result = subprocess.run(
+        ["shutdown", "/s", "/t", str(max(0, delay_seconds))],
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise PCControlError(f"Windows refused to shut down (exit {result.returncode})")
+
+
+def cancel_shutdown() -> None:
+    """Abort a pending shutdown/restart scheduled by shutdown_pc."""
+    _require_windows()
+    subprocess.run(["shutdown", "/a"], capture_output=True, timeout=10)

@@ -37,7 +37,7 @@ from app.models.schemas import (
     WakeResponse,
 )
 from app.middleware import CompanionTokenMiddleware
-from app.services import tools, tts
+from app.services import home_assistant, tools, tts
 from app.services.companion import CompanionUnavailable, companion_service
 from app.services.events import event_hub
 from app.services.proactive import proactive_service
@@ -132,6 +132,7 @@ async def health_check():
         model=settings.ollama_model,
         model_status=companion_service.model_status,
         tts_enabled=settings.tts_enabled,
+        ha_connected=await home_assistant.is_available(),
     )
 
 

@@ -41,3 +41,13 @@ soundfile>=0.14,<0.15
 # tools simply do not register elsewhere.
 pycaw>=20240210; sys_platform == "win32"
 comtypes>=1.4,<2; sys_platform == "win32"
+
+# Now-playing track info, via the same System Media Transport Controls session
+# Windows' own volume flyout mini-player reads. winsdk is Microsoft's official
+# WinRT projection for Python. Windows-only.
+winsdk>=1.0,<2; sys_platform == "win32"
+
+# CPU/RAM/battery stats for get_system_stats. Cross-platform, unlike the rest
+# of pc_control.py, but the tool itself is still Windows-only for now (no
+# Linux/macOS media or volume backends exist yet to pair it with).
+psutil>=6.0,<7; sys_platform == "win32"

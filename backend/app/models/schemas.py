@@ -122,3 +122,4 @@ class HealthResponse(BaseModel):
     # from one that is actually ready to answer.
     model_status: Literal["warming", "ready", "unavailable"]
     tts_enabled: bool = False
+    ha_connected: bool = False
