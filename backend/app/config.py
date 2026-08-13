@@ -98,6 +98,18 @@ class Settings(BaseSettings):
     # Hours of user silence before a check-in. 0 disables.
     proactive_idle_hours: float = Field(4.0, validation_alias="PROACTIVE_IDLE_HOURS")
 
+    # Local machine control (media keys, volume, lock screen). Windows only;
+    # the tools do not register on other platforms regardless of this flag.
+    pc_control_enabled: bool = Field(True, validation_alias="PC_CONTROL_ENABLED")
+
+    # Shared secret required by every endpoint except /health.
+    #
+    # MUST be set now that tools can act on the machine. Until PC control
+    # existed, an unauthenticated caller on the LAN could at worst set a
+    # reminder; now the same request can lock the screen or silence the
+    # speakers. Empty means no auth, which is logged loudly at startup.
+    companion_token: str = Field("", validation_alias="COMPANION_TOKEN")
+
     # FastAPI. Local dev only: "*" is fine while this runs on localhost, and
     # must be narrowed before the API is reachable from another machine.
     cors_origins: list[str] = Field(["*"], validation_alias="CORS_ORIGINS")

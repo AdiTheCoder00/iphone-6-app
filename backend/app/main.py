@@ -36,6 +36,7 @@ from app.models.schemas import (
     WakeRequest,
     WakeResponse,
 )
+from app.middleware import CompanionTokenMiddleware
 from app.services import tools, tts
 from app.services.companion import CompanionUnavailable, companion_service
 from app.services.events import event_hub
@@ -70,6 +71,11 @@ async def lifespan(app: FastAPI):
         settings.ollama_base_url,
         settings.ollama_model,
     )
+    if not settings.companion_token:
+        logger.warning(
+            "COMPANION_TOKEN is not set — every endpoint is open to anyone who can "
+            "reach this port. PC control tools are reachable unauthenticated."
+        )
     store.init()
     # Reminders that came due while the server was down are NOT lost: they stay
     # pending in SQLite and fire once a client connects (see check_reminders).
@@ -105,6 +111,10 @@ app = FastAPI(
 # Local dev only. CORS_ORIGINS defaults to "*" because the frontend is opened
 # straight from the filesystem or a throwaway static server, which gives it a
 # null/shifting origin. Narrow this before the API is reachable off-machine.
+app.add_middleware(CompanionTokenMiddleware)
+# Registered after the token check so Starlette wraps CORS outermost: preflight
+# requests are answered before auth, which they must be — a browser sends
+# OPTIONS without custom headers.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

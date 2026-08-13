@@ -948,6 +948,15 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
       </div>
 
       <div class="field">
+        <label class="field__label" for="setToken">
+          Access token <span class="field__value">must match backend</span>
+        </label>
+        <input class="field__input" id="setToken" type="password" inputmode="text"
+               autocapitalize="off" autocorrect="off" spellcheck="false"
+               placeholder="COMPANION_TOKEN from backend/.env" />
+      </div>
+
+      <div class="field">
         <label class="field__label" for="setCity">
           Weather city <span class="field__value">idle screen</span>
         </label>
@@ -1023,7 +1032,10 @@ window.CompanionConfig = (function () {
     sleepNow: false,
     voice: true,
     /* Blank means the idle readout shows the date only, no weather. */
-    city: ''
+    city: '',
+    /* Must match COMPANION_TOKEN in backend/.env. Without it every request
+       comes back 401 once the backend has a token set. */
+    token: ''
   };
   var listeners = [];
   var state;
@@ -1038,14 +1050,16 @@ window.CompanionConfig = (function () {
         dim: typeof parsed.dim === 'number' ? parsed.dim : DEFAULTS.dim,
         sleepNow: !!parsed.sleepNow,
         voice: typeof parsed.voice === 'boolean' ? parsed.voice : DEFAULTS.voice,
-        city: typeof parsed.city === 'string' ? parsed.city : DEFAULTS.city
+        city: typeof parsed.city === 'string' ? parsed.city : DEFAULTS.city,
+        token: typeof parsed.token === 'string' ? parsed.token : DEFAULTS.token
       };
     } catch (e) {
       /* Private mode or a corrupt value: fall back rather than fail to boot. */
       console.warn('[Companion] settings unreadable, using defaults:', e);
       return {
         backendUrl: DEFAULTS.backendUrl, dim: DEFAULTS.dim,
-        sleepNow: DEFAULTS.sleepNow, voice: DEFAULTS.voice, city: DEFAULTS.city
+        sleepNow: DEFAULTS.sleepNow, voice: DEFAULTS.voice,
+        city: DEFAULTS.city, token: DEFAULTS.token
       };
     }
   }
@@ -1084,6 +1098,21 @@ window.CompanionConfig = (function () {
     }
     if (controller) requestOptions.signal = controller.signal;
 
+    /* Shared token on every backend call. Merged into whatever headers the
+       caller already set rather than replacing them, so Content-Type on the
+       JSON posts survives — and FormData uploads keep their generated
+       multipart boundary by having no Content-Type set at all. */
+    var headers = {};
+    if (requestOptions.headers) {
+      for (key in requestOptions.headers) {
+        if (Object.prototype.hasOwnProperty.call(requestOptions.headers, key)) {
+          headers[key] = requestOptions.headers[key];
+        }
+      }
+    }
+    if (state.token) headers['X-Companion-Token'] = state.token;
+    requestOptions.headers = headers;
+
     var timer = controller ? setTimeout(function () { controller.abort(); },
       typeof timeoutMs === 'number' ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS) : null;
     return fetch(backendUrl() + path, requestOptions).then(
@@ -1098,9 +1127,20 @@ window.CompanionConfig = (function () {
     );
   }
 
+  /* EventSource has no API for setting request headers, so /events — and only
+     /events — also accepts the token as a query parameter. It is read-only,
+     but it does mean the token appears in the server's access log. */
+  function eventsUrl() {
+    var url = backendUrl() + '/events';
+    return state.token ? url + '?token=' + encodeURIComponent(state.token) : url;
+  }
+
   function onChange(fn) { listeners.push(fn); }
 
-  return { get: get, set: set, backendUrl: backendUrl, request: request, onChange: onChange };
+  return {
+    get: get, set: set, backendUrl: backendUrl, request: request,
+    eventsUrl: eventsUrl, onChange: onChange
+  };
 })();
 
 
@@ -1558,6 +1598,7 @@ window.CompanionChat = (function () {
   var BUBBLE_PER_CHAR_MS = 45;
   var BUBBLE_MAX_MS = 7000;
   var ERROR_TEXT = 'having trouble thinking right now';
+  var AUTH_ERROR_TEXT = 'my access token is wrong — check settings';
   var SSE_RETRY_MS = 3000;       // reconnect delay after a dropped stream
   var CHAT_REQUEST_TIMEOUT_MS = 75000;
 
@@ -1687,6 +1728,17 @@ window.CompanionChat = (function () {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, history: conversation.slice(0, -1) })
       }, CHAT_REQUEST_TIMEOUT_MS);
+      /* 401 is worth calling out by name. "Having trouble thinking" would send
+         the user hunting for a backend fault when the real problem is a token
+         they can fix in the settings sheet in ten seconds. */
+      if (res.status === 401) {
+        clearTimeout(thinkTimer);
+        if (mySend !== sendId) return;
+        conversation.pop();
+        window.Companion.setEmotion('sad');
+        showBubble(AUTH_ERROR_TEXT, true);
+        return;
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
 
@@ -1748,7 +1800,7 @@ window.CompanionChat = (function () {
     if (sse) { try { sse.close(); } catch (e) {} sse = null; }
 
     try {
-      sse = new EventSource(window.CompanionConfig.backendUrl() + '/events');
+      sse = new EventSource(window.CompanionConfig.eventsUrl());
     } catch (e) {
       console.error('[Companion] could not open event stream:', e);
       scheduleReconnect();
@@ -1816,9 +1868,11 @@ window.CompanionChat = (function () {
     }
   }
 
-  /* Pointing at a different backend must move the event stream too. */
+  /* Pointing at a different backend — or fixing the token — must move the
+     event stream too. The token rides in the stream's URL, so a changed token
+     means the existing connection is now unauthenticated. */
   window.CompanionConfig.onChange(function (key) {
-    if (key === 'backendUrl') {
+    if (key === 'backendUrl' || key === 'token') {
       if (sseRetryTimer !== null) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
       connectEvents();
     }
@@ -2064,6 +2118,14 @@ window.CompanionGlance = (function () {
   });
 
   /* --- weather city ------------------------------------------------------- */
+  /* --- access token ------------------------------------------------------- */
+  var tokenInput = document.getElementById('setToken');
+  tokenInput.value = window.CompanionConfig.get('token');
+  tokenInput.addEventListener('change', function () {
+    window.CompanionConfig.set('token', tokenInput.value.trim());
+    checkHealth();
+  });
+
   var cityInput = document.getElementById('setCity');
   cityInput.value = window.CompanionConfig.get('city');
   cityInput.addEventListener('change', function () {

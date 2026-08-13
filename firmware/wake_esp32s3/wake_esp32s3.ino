@@ -63,6 +63,11 @@ static const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 static const char* BACKEND_HOST = "192.168.1.20";
 static const uint16_t BACKEND_PORT = 8000;
 
+/* Must match COMPANION_TOKEN in backend/.env. The backend rejects /wake with
+ * 401 without it, so a board flashed with the wrong value will look like a
+ * dead microphone — check the serial log, the POST result is printed there. */
+static const char* BACKEND_TOKEN = "PASTE_COMPANION_TOKEN_HERE";
+
 /* --- audio ---------------------------------------------------------------- */
 static const uint32_t SAMPLE_RATE = 16000;
 /* 512 samples = 32ms at 16kHz. Small enough to react quickly, large enough
@@ -258,6 +263,7 @@ static void postWake() {
     return;
   }
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Companion-Token", BACKEND_TOKEN);
 
   const int status = http.POST((uint8_t*)body, strlen(body));
   if (status > 0) {

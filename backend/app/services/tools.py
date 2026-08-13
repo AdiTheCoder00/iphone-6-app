@@ -420,4 +420,123 @@ register(
 )
 
 
+# --- local machine control ----------------------------------------------------
+# Registered only on Windows, and only when PC_CONTROL_ENABLED. A fixed set of
+# named actions; deliberately no arbitrary command execution.
+
+def _register_pc_tools() -> None:
+    from app.config import settings
+    from app.services import pc_control
+
+    if not settings.pc_control_enabled:
+        logger.info("PC control tools disabled by config")
+        return
+    if not pc_control.IS_WINDOWS:
+        logger.info("PC control tools skipped: not running on Windows")
+        return
+
+    def _media(action: str) -> str:
+        try:
+            done = pc_control.media(action)
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return f"Sent '{done}' to whatever is playing."
+
+    register(
+        Tool(
+            name="control_media",
+            description=(
+                "Control media playback on the user's PC (whatever app is playing — "
+                "Spotify, a browser, a video). Use for pause, resume, skip, previous."
+            ),
+            parameters={
+                "action": {
+                    "type": "string",
+                    "description": "One of: play_pause, next, previous, stop",
+                }
+            },
+            required=["action"],
+            func=_media,
+        )
+    )
+
+    def _volume(percent: int) -> str:
+        try:
+            level = pc_control.set_volume(percent)
+        except (pc_control.PCControlError, TypeError, ValueError) as e:
+            return f"ERROR: could not set volume ({e})"
+        return f"Volume set to {level}%."
+
+    register(
+        Tool(
+            name="set_volume",
+            description="Set the PC's speaker volume to a percentage from 0 to 100. Also unmutes.",
+            parameters={"percent": {"type": "integer", "description": "0-100"}},
+            required=["percent"],
+            func=_volume,
+        )
+    )
+
+    def _mute(muted: bool = True) -> str:
+        try:
+            # The model may send a real bool or the string "true".
+            flag = muted if isinstance(muted, bool) else str(muted).strip().lower() in ("true", "1", "yes")
+            pc_control.set_mute(flag)
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return "Muted." if flag else "Unmuted."
+
+    register(
+        Tool(
+            name="set_mute",
+            description="Mute or unmute the PC's sound.",
+            parameters={"muted": {"type": "boolean", "description": "true to mute, false to unmute"}},
+            required=["muted"],
+            func=_mute,
+        )
+    )
+
+    def _status() -> str:
+        try:
+            level, muted = pc_control.get_volume()
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return f"Volume is {level}%{' (muted)' if muted else ''}."
+
+    register(
+        Tool(
+            name="get_volume",
+            description="Check the PC's current volume level and whether it is muted.",
+            parameters={},
+            required=[],
+            func=_status,
+        )
+    )
+
+    def _lock() -> str:
+        try:
+            pc_control.lock_screen()
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return "PC locked."
+
+    register(
+        Tool(
+            name="lock_pc",
+            description=(
+                "Lock the user's PC screen. Use only when they clearly ask to lock it, "
+                "or say they are stepping away or heading out."
+            ),
+            parameters={},
+            required=[],
+            func=_lock,
+        )
+    )
+
+    logger.info("PC control tools registered (media, volume, mute, lock)")
+
+
+_register_pc_tools()
+
+
 __all__ = ["Tool", "execute", "render_tool_specs", "all_tools", "get", "register", "MAX_FACTS"]

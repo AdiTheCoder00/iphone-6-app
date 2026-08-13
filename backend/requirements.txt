@@ -34,3 +34,10 @@ python-multipart>=0.0.32,<0.1
 # on every device instead of inheriting whatever voice iOS picks.
 kokoro-onnx>=0.5,<0.6
 soundfile>=0.14,<0.15
+
+# PC control: absolute volume via Windows Core Audio. Media keys and the lock
+# screen need no dependency (plain ctypes into user32), but stepping the
+# volume with key taps cannot hit a specific percentage. Windows-only; the
+# tools simply do not register elsewhere.
+pycaw>=20240210; sys_platform == "win32"
+comtypes>=1.4,<2; sys_platform == "win32"
