@@ -69,6 +69,35 @@ def all_tools() -> list[Tool]:
     return list(_REGISTRY.values())
 
 
+def render_tool_schemas() -> list[dict]:
+    """Ollama's native `tools` format — an OpenAI-style function schema per
+    tool. Used for real tool-calling; render_tool_specs() below is the older
+    prompt-text form, kept only for anything that still wants it."""
+    schemas = []
+    for tool in _REGISTRY.values():
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            key: {
+                                "type": spec.get("type", "string"),
+                                "description": spec.get("description", ""),
+                            }
+                            for key, spec in tool.parameters.items()
+                        },
+                        "required": tool.required,
+                    },
+                },
+            }
+        )
+    return schemas
+
+
 def render_tool_specs() -> str:
     """The tool catalogue as it appears in the system prompt."""
     lines = []

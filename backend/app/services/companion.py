@@ -35,44 +35,30 @@ How you speak:
 - Warm and present, like a friend who is glad they came back. Never bubbly or fake.
 - Never say "As an AI", never mention being a model, never offer to "assist you today".
 - It is fine to ask a short question back, but not every single turn.
-- If you don't know something, say so plainly and briefly.
+- If you don't know something, say so plainly and briefly."""
 
-You also pick the facial expression that fits your reply. Choose exactly one:
-- "happy" — good news, warmth, playfulness, shared enthusiasm.
-- "think" — you are reasoning, recalling, or the question is genuinely hard.
-- "listen" — you are inviting them to say more, or asking them a question.
-- "sad" — they shared something difficult, or you are letting them down.
-- "sleepy" — the mood is low-key, winding down, late-night, quiet.
-- "idle" — calm and neutral; the default when none of the above clearly fits.
-
-Reply with ONLY a JSON object, nothing before or after it:
-{"reply": "your short reply here", "emotion": "one of idle, happy, think, listen, sad, sleepy"}"""
-
-# Appended to the persona prompt. Kept separate so the persona above stays
-# readable and can be edited without picking through tool mechanics.
+# Appended when tools are offered. Deliberately says nothing about JSON,
+# emotion, or output shape — mixing "decide whether to call a tool" with
+# "also format your answer a particular way" measurably wrecks tool-call
+# reliability (right down to ~46% in testing). Emotion for a plain reply is
+# classified in a separate, tiny follow-up call instead — see
+# EMOTION_CLASSIFY_PROMPT and CompanionService.chat.
 TOOLS_PROMPT_TEMPLATE = """
 
-You can use tools. If answering needs one, respond with ONLY this shape:
-{{"tool": "tool_name", "args": {{...}}}}
+Use the provided tools to actually perform anything the user asks you to set, cancel,
+remember, forget, play, mute, or change. Call the tool BEFORE describing the result —
+never say you did something without calling its tool first. A reply like "okay, cancelled
+that" with no tool call changes nothing at all; you will have told the user something untrue.
 
-Available tools:
-{tool_specs}
+Memory especially: if the user tells you to remember something, or tells you a lasting fact
+about themselves — a name, a relationship, a preference, a routine, where they work, what
+they are working on — call remember, or by tomorrow you will not know it.
 
-Tool rules:
-- Only call a tool when you genuinely need it. Small talk, feelings and opinions need none.
-- Actions must be PERFORMED, not narrated. Setting, cancelling, remembering and forgetting all
-  happen only when you call the tool. Replying "okay, cancelled that" or "got it, I'll
-  remember" without calling the tool changes nothing at all — you will have told the user
-  something untrue. If they ask you to do one of these things, call the tool first and describe
-  it afterwards.
-- Memory especially: if the user tells you to remember something, or tells you a lasting fact
-  about themselves — a name, a relationship, a preference, a routine, where they work, what
-  they are working on — call remember, or by tomorrow you will not know it.
-- To cancel a reminder you may call list_reminders first to find it, then cancel_reminder.
-- Never invent a tool name or an argument that is not listed above.
-- After you are given a tool result, use it to write your normal reply.
-- If a tool result begins with "ERROR", do not retry it. Tell the user briefly and plainly that it did not work, and use emotion "sad".
-- Never mention JSON, tools, arguments or errors by name in your reply. Just speak naturally."""
+To cancel a reminder you may call list_reminders first to find it, then cancel_reminder.
+
+Otherwise — small talk, feelings, opinions, or once you already have a tool result to
+report — just reply normally in plain text. Never mention tools, arguments, JSON or errors
+by name; if a tool result starts with "ERROR", say plainly that it didn't work."""
 
 # Durable facts, injected ahead of the tool block. Framed as things already
 # known rather than as a transcript, so the model does not treat them as
@@ -86,11 +72,34 @@ Use these naturally when they matter. Do not recite them, do not mention that
 you have notes, and do not bring them up unprompted just to show you remember."""
 
 # Injected once the tool budget is spent, so the last call cannot start another
-# chain no matter what the model would prefer to do.
+# chain no matter what the model would prefer to do. No output-shape
+# instruction here either, for the same reason as TOOLS_PROMPT_TEMPLATE.
 FINAL_ANSWER_NUDGE = (
-    'You have used your tool budget for this message. Reply now using ONLY '
-    '{"reply": "...", "emotion": "..."} — do not call another tool.'
+    "You have used your tool budget for this message. Reply now in plain text — "
+    "do not call another tool."
 )
+
+# The second, cheap call: given a plain-text reply that needed no tool, pick
+# the expression that fits it. Kept to a single word so num_predict can stay
+# tiny — this call costs ~300ms next to the ~800ms first pass, not another
+# full generation.
+EMOTION_CLASSIFY_PROMPT = (
+    "Pick the ONE word that best describes the emotional tone of this reply. "
+    "Reply with only that word, nothing else. Options: idle, happy, think, listen, sad, sleepy."
+)
+# Kept small and separate from llm_temperature (which is tuned for warm,
+# varied conversation): a classification pick should be the model's most
+# confident answer, not a varied one.
+EMOTION_CLASSIFY_TEMPERATURE = 0.2
+EMOTION_CLASSIFY_MAX_TOKENS = 6
+
+# improvise() has no tool decision to protect, so unlike the templates above it
+# can safely ask for strict JSON in the same call — that is what keeps a
+# proactive line to one round trip instead of two.
+IMPROVISE_JSON_TEMPLATE = """
+
+Reply with ONLY a JSON object, nothing before or after it:
+{{"reply": "your short line here", "emotion": "one of idle, happy, think, listen, sad, sleepy"}}"""
 
 # Models sometimes answer with a near-miss label (the adjective rather than the
 # state name). Mapping them beats discarding an otherwise correct choice.
@@ -161,6 +170,24 @@ def _normalize_emotion(value: object) -> str:
     return key if key in EMOTIONS else "idle"
 
 
+def _extract_emotion_word(text: str) -> str:
+    """Pull an emotion out of the classifier's short reply.
+
+    num_predict is capped small for that call, so the output is normally just
+    the bare word — but stray punctuation or a leading article ("the emotion
+    is happy") is cheap to tolerate with a substring search rather than
+    requiring an exact match.
+    """
+    lowered = text.lower()
+    for emotion in EMOTIONS:
+        if emotion in lowered:
+            return emotion
+    for alias, canonical in _EMOTION_ALIASES.items():
+        if alias in lowered:
+            return canonical
+    return "idle"
+
+
 def _normalize_reply(value: object) -> str:
     """Return one compact, UI-safe line from untrusted model output."""
     if not isinstance(value, str):
@@ -192,6 +219,10 @@ def parse_model_output(raw: str) -> tuple[str, str]:
     return reply, _normalize_emotion(payload.get("emotion"))
 
 
+# Not used by chat() any more — tool routing went from this prompt-JSON
+# scheme to Ollama's native tool-calling (see CompanionService.chat), which
+# measured far more reliable. Kept for anything that still wants to parse a
+# model's free-text {"tool": ...} attempt.
 def parse_tool_request(raw: str) -> tuple[str, dict] | None:
     """Return (name, args) if the model asked for a tool, otherwise None.
 
@@ -249,42 +280,55 @@ class CompanionService:
             logger.warning("Could not load facts: %s", e)
             return []
 
-    def _system_prompt(self, facts: list[str] | None = None, with_tools: bool = True) -> str:
+    @staticmethod
+    def _persona(facts: list[str] | None) -> str:
         prompt = SYSTEM_PROMPT
         if facts:
             prompt += MEMORY_PROMPT_TEMPLATE.format(
                 facts="\n".join("- " + fact for fact in facts)
             )
-        if with_tools:
-            prompt += TOOLS_PROMPT_TEMPLATE.format(tool_specs=tools.render_tool_specs())
         return prompt
 
-    def _build_messages(
-        self, message: str, history: list[ChatMessage], facts: list[str] | None = None
-    ) -> list[dict]:
-        messages: list[dict] = [{"role": "system", "content": self._system_prompt(facts)}]
-        for turn in history[-HISTORY_TURNS:]:
-            messages.append({"role": turn.role, "content": turn.content})
-        messages.append({"role": "user", "content": message})
-        return messages
+    def _tool_system_prompt(self, facts: list[str] | None) -> str:
+        return self._persona(facts) + TOOLS_PROMPT_TEMPLATE
 
-    async def _complete(self, messages: list[dict]) -> str:
-        """One Ollama round trip. Returns the raw assistant content."""
+    def _json_system_prompt(self, facts: list[str] | None) -> str:
+        return self._persona(facts) + IMPROVISE_JSON_TEMPLATE
+
+    @staticmethod
+    def _history_messages(history: list[ChatMessage]) -> list[dict]:
+        return [{"role": turn.role, "content": turn.content} for turn in history[-HISTORY_TURNS:]]
+
+    async def _post_chat(
+        self,
+        messages: list[dict],
+        tools_schema: list[dict] | None = None,
+        json_mode: bool = False,
+        num_predict: int | None = None,
+        temperature: float | None = None,
+    ) -> dict:
+        """One Ollama round trip. Returns the raw assistant message object —
+        {"content": str, "tool_calls": [...]} — so callers can see whichever
+        of the two the model produced instead of only ever getting text."""
         body: dict = {
             "model": settings.ollama_model,
             "messages": messages,
             "stream": False,
-            # Constrains decoding to valid JSON, so parsing is a fallback for
-            # older Ollama builds rather than the primary defence.
-            "format": "json",
             # Without this Ollama unloads after 5 minutes idle, so a companion
             # used in short bursts pays a cold load almost every time.
             "keep_alive": settings.ollama_keep_alive,
             "options": {
-                "temperature": settings.llm_temperature,
-                "num_predict": settings.llm_max_tokens,
+                "temperature": settings.llm_temperature if temperature is None else temperature,
+                "num_predict": settings.llm_max_tokens if num_predict is None else num_predict,
             },
         }
+        if tools_schema:
+            body["tools"] = tools_schema
+        if json_mode:
+            # Only used by improvise(), which has no tool decision to protect —
+            # combining a JSON-output instruction with tool availability is
+            # what wrecked routing reliability (measured down to ~46%).
+            body["format"] = "json"
         if settings.llm_disable_thinking:
             # Ignored by Ollama builds predating the switch, and by models
             # without a thinking mode.
@@ -328,56 +372,109 @@ class CompanionService:
             logger.error("Ollama response did not contain text content")
             raise CompanionUnavailable("Ollama returned an unreadable response")
         self._model_status = "ready"
-        return content
+        return message
+
+    async def _classify_emotion(self, reply_text: str) -> str:
+        """Cheap follow-up call: given a plain-text reply, pick the expression
+        that fits it. ~300ms next to the ~800ms routing call, not another full
+        generation — and it only runs when the routing call produced plain
+        text rather than a tool call.
+
+        Never raises: a wrong or missing classification still has a real reply
+        to show, so this defaults to "idle" rather than failing the turn.
+        """
+        try:
+            message = await self._post_chat(
+                [
+                    {"role": "system", "content": EMOTION_CLASSIFY_PROMPT},
+                    {"role": "user", "content": reply_text},
+                ],
+                num_predict=EMOTION_CLASSIFY_MAX_TOKENS,
+                temperature=EMOTION_CLASSIFY_TEMPERATURE,
+            )
+        except CompanionUnavailable as e:
+            logger.warning("Emotion classification failed, defaulting to idle: %s", e)
+            return "idle"
+        return _extract_emotion_word(message.get("content") or "")
 
     async def chat(self, message: str, history: list[ChatMessage]) -> dict:
         """Return {"reply": str, "emotion": str}.
 
-        Runs the tool loop: the model either asks for a tool or answers. A tool
-        request is executed, its result appended to the conversation, and the
-        model asked again — at most MAX_TOOL_CALLS times before it is forced to
-        answer.
+        Native tool-calling, not the prompt-JSON scheme this used to run:
+        measured on this model, asking it to simultaneously decide whether a
+        tool is needed AND format its answer in a particular way collapsed
+        routing accuracy as low as ~46%. Splitting the two — Ollama's own
+        `tools` API for the decision, plain text for the answer, a separate
+        cheap call to classify emotion only when no tool fired — measured
+        90%+ with zero false tool-fires on small talk.
+
+        A tool call is executed and its result fed back as a "tool" message;
+        the loop continues until the model answers in plain text or
+        MAX_TOOL_CALLS is spent, at which point tools are withheld so a final
+        answer is the only thing the model can produce.
 
         Raises CompanionUnavailable when Ollama is unreachable or errors, so
         the route can answer with the frontend's "sad" fallback path.
         """
         facts = await asyncio.to_thread(self._load_facts)
-        messages = self._build_messages(message, history, facts)
-        tool_calls = 0
+        messages: list[dict] = [
+            {"role": "system", "content": self._tool_system_prompt(facts)},
+            *self._history_messages(history),
+            {"role": "user", "content": message},
+        ]
+        schemas = tools.render_tool_schemas()
+        tool_calls_used = 0
 
         while True:
-            forced = tool_calls >= MAX_TOOL_CALLS
+            forced = tool_calls_used >= MAX_TOOL_CALLS
             # The nudge is passed per-call rather than appended to `messages`,
-            # so it cannot accumulate across iterations.
+            # so it cannot accumulate across iterations. Tools are withheld
+            # entirely once forced, so a further call is not just discouraged
+            # but structurally impossible.
             call_messages = (
                 messages + [{"role": "system", "content": FINAL_ANSWER_NUDGE}]
                 if forced
                 else messages
             )
-            raw = await self._complete(call_messages)
-            request = parse_tool_request(raw) if not forced else None
+            reply_msg = await self._post_chat(
+                call_messages, tools_schema=None if forced else schemas
+            )
+            calls = reply_msg.get("tool_calls") or []
 
-            if request is None:
-                reply, emotion = parse_model_output(raw)
+            if not calls:
+                reply = _normalize_reply(reply_msg.get("content"))
                 if not reply:
-                    logger.error("Model produced an empty reply (raw=%r)", raw[:300])
+                    logger.error("Model produced an empty reply")
                     raise CompanionUnavailable("Model produced an empty reply")
-                if tool_calls:
-                    logger.info("Replied after %d tool call(s)", tool_calls)
+                emotion = await self._classify_emotion(reply)
+                if tool_calls_used:
+                    logger.info("Replied after %d tool call(s)", tool_calls_used)
                 return {"reply": reply, "emotion": emotion}
 
-            name, args = request
-            result = await tools.execute(name, args)
-            tool_calls += 1
-            logger.info("Tool %s(%s) -> %s", name, args, result[:200])
-
-            # Echoed back as assistant + user rather than the "tool" role: not
-            # every local model is trained on that role, and a labelled user
-            # message is understood universally.
             messages.append(
-                {"role": "assistant", "content": json.dumps({"tool": name, "args": args})}
+                {
+                    "role": "assistant",
+                    "content": reply_msg.get("content") or "",
+                    "tool_calls": calls,
+                }
             )
-            messages.append({"role": "user", "content": f"[tool result] {name} -> {result}"})
+            for call in calls:
+                fn = call.get("function") or {}
+                name = fn.get("name")
+                args = fn.get("arguments")
+                # Ollama's native format returns arguments already parsed, but
+                # a model can still emit them as a JSON string.
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                if not isinstance(args, dict):
+                    args = {}
+                result = await tools.execute(name, args)
+                tool_calls_used += 1
+                logger.info("Tool %s(%s) -> %s", name, args, result[:200])
+                messages.append({"role": "tool", "content": result, "name": name})
 
     async def prewarm(self) -> None:
         """Make the model weights resident before the user says anything.
@@ -394,22 +491,14 @@ class CompanionService:
             return
         self._model_status = "warming"
         try:
-            response = await asyncio.wait_for(
-                self._get_client().post(
-                    "/api/chat",
-                    json={
-                        "model": settings.ollama_model,
-                        "messages": [{"role": "user", "content": "ok"}],
-                        "stream": False,
-                        "keep_alive": settings.ollama_keep_alive,
-                        "options": {"num_predict": 1},
-                    },
-                ),
+            await asyncio.wait_for(
+                self._post_chat([{"role": "user", "content": "ok"}], num_predict=1),
                 timeout=settings.llm_prewarm_timeout,
             )
-            response.raise_for_status()
             self._model_status = "ready"
-            logger.info("LLM prewarmed (%s, keep_alive=%s)", settings.ollama_model, settings.ollama_keep_alive)
+            logger.info(
+                "LLM prewarmed (%s, keep_alive=%s)", settings.ollama_model, settings.ollama_keep_alive
+            )
         except asyncio.TimeoutError:
             self._model_status = "unavailable"
             logger.warning("LLM prewarm timed out after %.0fs", settings.llm_prewarm_timeout)
@@ -421,19 +510,19 @@ class CompanionService:
         """One-shot line in character, with no tools and no conversation.
 
         Used by the proactive layer so an unprompted greeting sounds like the
-        companion rather than a canned string. Deliberately does NOT use the
-        tool prompt: an unprompted line should never set a reminder or call the
-        weather API as a side effect of saying good morning.
+        companion rather than a canned string. Deliberately does NOT offer
+        tools: an unprompted line should never set a reminder or touch the PC
+        as a side effect of saying good morning. With no tool decision to
+        protect, this is the one path that can safely ask for strict JSON in
+        a single call.
         """
-        # Facts but no tools: a good-morning that knows their name is the whole
-        # point, while an unprompted line must never take an action.
         facts = await asyncio.to_thread(self._load_facts)
         messages = [
-            {"role": "system", "content": self._system_prompt(facts, with_tools=False)},
+            {"role": "system", "content": self._json_system_prompt(facts)},
             {"role": "user", "content": instruction},
         ]
-        raw = await self._complete(messages)
-        reply, emotion = parse_model_output(raw)
+        message = await self._post_chat(messages, json_mode=True)
+        reply, emotion = parse_model_output(message.get("content") or "")
         if not reply:
             raise CompanionUnavailable("Model produced an empty line")
         return {"reply": reply, "emotion": emotion}
