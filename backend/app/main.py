@@ -31,8 +31,13 @@ from app.models.schemas import (
     FactOut,
     FactsResponse,
     HealthResponse,
+    NowPlaying,
+    PCStatusResponse,
     ReminderOut,
     RemindersResponse,
+    SmartDeviceOut,
+    SmartDevicesResponse,
+    SmartDeviceStateRequest,
     SnoozeReminderRequest,
     SpeakRequest,
     TranscribeResponse,
@@ -296,6 +301,83 @@ async def ambient(city: str = Query("", max_length=100)):
 
     _cache_ambient(cache_key, summary, now)
     return AmbientResponse(weather=summary)
+
+
+@app.get("/status/pc", response_model=PCStatusResponse)
+async def pc_status():
+    """Read-only snapshot of this machine, for the dashboard.
+
+    Deliberately read-only. The dashboard never exposes lock/sleep/shutdown —
+    those stay behind the companion's spoken confirmation flow rather than
+    becoming a button that a mis-click can fire.
+
+    Each part is fetched independently so one failing subsystem (no audio
+    device, no media session) degrades that field to null instead of losing
+    the whole panel.
+    """
+    from app.services import pc_control
+
+    if not pc_control.IS_WINDOWS or not settings.pc_control_enabled:
+        return PCStatusResponse(available=False)
+
+    result = PCStatusResponse(available=True)
+
+    try:
+        track = await pc_control.now_playing()
+        if track:
+            result.now_playing = NowPlaying(**track)
+    except Exception as e:
+        logger.info("Dashboard now-playing unavailable: %s", e)
+
+    try:
+        level, muted = await asyncio.to_thread(pc_control.get_volume)
+        result.volume_percent, result.muted = level, muted
+    except Exception as e:
+        logger.info("Dashboard volume unavailable: %s", e)
+
+    try:
+        stats = await asyncio.to_thread(pc_control.system_stats)
+        result.cpu_percent = stats["cpu_percent"]
+        result.ram_percent = stats["ram_percent"]
+        result.battery_percent = stats["battery_percent"]
+        result.battery_plugged = stats["battery_plugged"]
+    except Exception as e:
+        logger.info("Dashboard system stats unavailable: %s", e)
+
+    return result
+
+
+@app.get("/smart/devices", response_model=SmartDevicesResponse)
+async def smart_devices():
+    """Smart home devices and their on/off state. Read-only."""
+    if not settings.ha_enabled or not settings.ha_token:
+        return SmartDevicesResponse(available=False)
+    try:
+        devices = await home_assistant.list_devices()
+    except home_assistant.HomeAssistantError as e:
+        logger.info("Dashboard smart devices unavailable: %s", e)
+        return SmartDevicesResponse(available=False)
+    return SmartDevicesResponse(
+        available=True, devices=[SmartDeviceOut(**d) for d in devices]
+    )
+
+
+@app.post("/smart/devices/{entity_id}/state")
+async def set_smart_device_state(entity_id: str, body: SmartDeviceStateRequest):
+    """Turn one device on or off.
+
+    Exposed to the dashboard because it is trivially reversible — the worst a
+    mis-click does is switch a lamp, and switching it back is one more click.
+    That is the line for what gets a button here.
+    """
+    if not settings.ha_enabled or not settings.ha_token:
+        raise HTTPException(status_code=503, detail="Home Assistant is not configured")
+    try:
+        await home_assistant.set_state(entity_id, body.turn_on)
+    except home_assistant.HomeAssistantError as e:
+        logger.warning("Smart device control failed for %s: %s", entity_id, e)
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return {"entity_id": entity_id, "turn_on": body.turn_on}
 
 
 @app.get("/conversation", response_model=ConversationResponse)

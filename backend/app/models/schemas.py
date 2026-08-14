@@ -114,6 +114,50 @@ class ConversationResponse(BaseModel):
     messages: list[ChatMessage]
 
 
+class NowPlaying(BaseModel):
+    title: str
+    artist: str
+    app: str
+    status: str
+
+
+class PCStatusResponse(BaseModel):
+    """Read-only snapshot of the machine, for the dashboard.
+
+    Every field is optional: a PC without a battery, a machine with nothing
+    playing, or a non-Windows host should all render a partial panel rather
+    than fail the whole request.
+    """
+
+    available: bool
+    now_playing: NowPlaying | None = None
+    volume_percent: int | None = None
+    muted: bool | None = None
+    cpu_percent: float | None = None
+    ram_percent: float | None = None
+    battery_percent: int | None = None
+    battery_plugged: bool | None = None
+
+
+class SmartDeviceOut(BaseModel):
+    entity_id: str
+    name: str
+    domain: str
+    state: str
+
+
+class SmartDeviceStateRequest(BaseModel):
+    turn_on: bool
+
+
+class SmartDevicesResponse(BaseModel):
+    # False when Home Assistant is disabled, untokened or unreachable — the
+    # dashboard shows a setup hint instead of an empty list, which would
+    # wrongly read as "you have no devices".
+    available: bool
+    devices: list[SmartDeviceOut] = []
+
+
 class HealthResponse(BaseModel):
     status: str
     ollama_connected: bool
