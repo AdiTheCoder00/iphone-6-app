@@ -16,6 +16,7 @@ music pauses or the screen locks.
 
 import ctypes
 import logging
+import re
 import subprocess
 import sys
 
@@ -178,6 +179,77 @@ def launch_app(path: str) -> None:
         os_startfile(path)
     except OSError as e:
         raise PCControlError(f"could not launch it ({e})") from e
+
+
+# --- open a browser tab -------------------------------------------------------
+# Only http/https, and the check is a hard requirement rather than tidiness.
+# Windows' ShellExecute (what os.startfile and webbrowser both end up calling)
+# happily EXECUTES things: os.startfile("calc.exe") launches Calculator, and a
+# file:// or ms-settings: target would open local files or system panels. The
+# model chooses this argument, so without a scheme allowlist "open a tab"
+# becomes "run an arbitrary program".
+ALLOWED_URL_SCHEMES = {"http", "https"}
+
+# Dot-separated labels only. Deliberately rejects anything with a space, a
+# backslash or no dot at all — "cmd.exe /c dir" and "notepad" are not
+# addresses, and should fail loudly rather than be silently turned into a
+# nonsense URL.
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\.?$",
+    re.IGNORECASE,
+)
+
+# "calc.exe" satisfies the hostname pattern — ".exe" is shaped exactly like a
+# TLD. Prepending https:// already makes it inert (the browser gets a URL and
+# fails to resolve the host, it does not run anything), but relying on that is
+# relying on a subtlety. Rejecting outright means the guarantee is visible in
+# the code. ".com" is deliberately absent: it is a real TLD before it is a DOS
+# executable.
+_PROGRAM_SUFFIXES = (
+    ".exe", ".bat", ".cmd", ".msi", ".ps1", ".vbs", ".scr",
+    ".lnk", ".dll", ".hta", ".jar", ".sh", ".app",
+)
+
+
+def open_url(url: str) -> str:
+    """Open a web URL in the default browser. Returns the URL actually opened."""
+    _require_windows()
+    import urllib.parse
+    import webbrowser
+
+    url = (url or "").strip()
+    if not url:
+        raise PCControlError("no address given")
+
+    parsed = urllib.parse.urlparse(url)
+
+    if parsed.scheme:
+        # An explicit scheme must be one we allow. This is the check that
+        # stops "javascript:", "file:", "data:" and "ms-settings:" — and note
+        # it also catches Windows paths, since "C:/Windows/..." parses as
+        # scheme "c".
+        if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
+            raise PCControlError(
+                f"only http and https addresses can be opened, not '{parsed.scheme}:'"
+            )
+        if not parsed.netloc:
+            raise PCControlError(f"'{url}' is not a valid web address")
+        final = url
+    else:
+        # No scheme: accept it only if it genuinely looks like a bare
+        # hostname, then assume https. Validating BEFORE prepending is the
+        # point — prepending first would turn "javascript:alert(1)" into
+        # something that passes a naive scheme check.
+        host = url.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        if host.lower().endswith(_PROGRAM_SUFFIXES):
+            raise PCControlError(f"'{url}' looks like a program, not a website")
+        if not _HOSTNAME_RE.match(host):
+            raise PCControlError(f"'{url}' is not a web address")
+        final = "https://" + url
+
+    if not webbrowser.open(final):
+        raise PCControlError("no browser was available to open it")
+    return final
 
 
 def os_startfile(path: str) -> None:

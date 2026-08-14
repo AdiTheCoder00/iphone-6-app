@@ -68,10 +68,18 @@ export interface EventLogEntry extends CompanionEvent {
   at: Date;
 }
 
+const SSE_RETRY_MS = 3000;
+const SSE_RETRY_MAX_MS = 60000;
+
 /**
- * Live SSE feed. Keeps the most recent `limit` events; reconnects on drop,
- * matching companion.html's 3s cadence rather than trusting EventSource's own
- * retry, which gives up once the connection is closed outright.
+ * Live SSE feed. Keeps the most recent `limit` events, and reconnects on drop
+ * rather than trusting EventSource's own retry, which gives up once the
+ * connection is closed outright.
+ *
+ * Backoff doubles per consecutive failure up to a minute. A flat retry is
+ * right for a backend that restarted, but wrong for a missing or wrong token:
+ * that never fixes itself, and a flat 3s loop just generates failed requests
+ * forever.
  */
 export function useEvents(settings: Settings, limit = 50) {
   const [events, setEvents] = useState<EventLogEntry[]>([]);
@@ -82,17 +90,29 @@ export function useEvents(settings: Settings, limit = 50) {
     let source: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+    let delay = SSE_RETRY_MS;
+
+    const scheduleRetry = () => {
+      if (closed) return;
+      const wait = delay;
+      delay = Math.min(delay * 2, SSE_RETRY_MAX_MS);
+      retry = setTimeout(connect, wait);
+    };
 
     const connect = () => {
       if (closed) return;
       try {
         source = new EventSource(eventsUrl(settings));
       } catch {
-        retry = setTimeout(connect, 3000);
+        scheduleRetry();
         return;
       }
 
-      source.onopen = () => setConnected(true);
+      source.onopen = () => {
+        /* A real connection resets the backoff. */
+        delay = SSE_RETRY_MS;
+        setConnected(true);
+      };
 
       source.onmessage = (e) => {
         let payload: CompanionEvent;
@@ -114,7 +134,7 @@ export function useEvents(settings: Settings, limit = 50) {
         setConnected(false);
         source?.close();
         source = null;
-        if (!closed) retry = setTimeout(connect, 3000);
+        scheduleRetry();
       };
     };
 

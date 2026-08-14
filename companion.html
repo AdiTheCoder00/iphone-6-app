@@ -1643,7 +1643,12 @@ window.CompanionChat = (function () {
   var BUBBLE_ACTION_MAX_MS = 12000;   // reminder bubbles with Done/Snooze
   var ERROR_TEXT = 'having trouble thinking right now';
   var AUTH_ERROR_TEXT = 'my access token is wrong — check settings';
-  var SSE_RETRY_MS = 3000;       // reconnect delay after a dropped stream
+  /* First reconnect delay after a dropped stream. Subsequent failures back
+     off up to SSE_RETRY_MAX_MS — a flat 3s retry is right for a backend that
+     restarted, but wrong for a wrong/missing token, which never fixes itself
+     and would otherwise be retried every 3s forever on battery. */
+  var SSE_RETRY_MS = 3000;
+  var SSE_RETRY_MAX_MS = 60000;
   var CHAT_REQUEST_TIMEOUT_MS = 75000;
   /* Only the most recent turns are useful context for the model, and the full
      in-memory conversation grows all day on a 1GB phone. Capped client-side
@@ -1853,12 +1858,20 @@ window.CompanionChat = (function () {
   var sseLastEventAt = 0;
   var sseWatchdogTimer = null;
 
+  var sseRetryDelay = SSE_RETRY_MS;
+
   function scheduleReconnect() {
     if (sseRetryTimer !== null) return;       // a retry is already pending
+    var delay = sseRetryDelay;
+    /* Double each consecutive failure, capped. Reset to the fast delay as
+       soon as a stream actually opens, so a transient blip still recovers in
+       3s while a permanent fault (bad token) stops hammering the backend. */
+    sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_MAX_MS);
     sseRetryTimer = setTimeout(function () {
       sseRetryTimer = null;
       connectEvents();
-    }, SSE_RETRY_MS);
+    }, delay);
+    return delay;
   }
 
   function connectEvents() {
@@ -1872,6 +1885,13 @@ window.CompanionChat = (function () {
       scheduleReconnect();
       return;
     }
+
+    sse.onopen = function () {
+      if (myGen !== sseGeneration) return;
+      /* A real connection resets the backoff, so the next unrelated blip is
+         retried quickly rather than inheriting a long delay. */
+      sseRetryDelay = SSE_RETRY_MS;
+    };
 
     sse.onmessage = function (e) {
       if (myGen !== sseGeneration) return;    // a newer stream owns the slot
@@ -1901,11 +1921,11 @@ window.CompanionChat = (function () {
       if (myGen !== sseGeneration) return;
       /* EventSource retries on its own for transient drops but gives up once
          the connection is closed (a backend restart), so drive it explicitly
-         on a fixed 3s cadence instead of trusting the built-in behaviour. */
-      console.warn('[Companion] event stream lost, retrying in ' + SSE_RETRY_MS + 'ms');
+         rather than trusting the built-in behaviour. */
       sseLastEventAt = Date.now();    // the retry loop is live; the watchdog need not also fire
       if (sse) { try { sse.close(); } catch (err) {} sse = null; }
-      scheduleReconnect();
+      var delay = scheduleReconnect();
+      if (delay) console.warn('[Companion] event stream lost, retrying in ' + delay + 'ms');
     };
   }
 

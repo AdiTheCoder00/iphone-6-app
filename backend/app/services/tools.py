@@ -629,6 +629,46 @@ def _register_pc_tools() -> None:
             )
         )
 
+    def _open_browser(target: str) -> str:
+        target = (target or "").strip()
+        if not target:
+            return "ERROR: open_in_browser needs an address or a shortcut name"
+
+        # A shortcut name wins over treating the text as an address, so
+        # "open my email" resolves to the configured URL rather than trying
+        # to visit https://my email.
+        resolved = settings.pc_url_shortcuts.get(target.lower(), target)
+        try:
+            opened = pc_control.open_url(resolved)
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return f"Opened {opened} in the browser."
+
+    shortcut_hint = (
+        " Known shortcuts: " + ", ".join(sorted(settings.pc_url_shortcuts))
+        if settings.pc_url_shortcuts
+        else ""
+    )
+    register(
+        Tool(
+            name="open_in_browser",
+            description=(
+                "Open a website in a new browser tab on the user's PC. Pass a full "
+                "address like 'https://youtube.com', or a bare domain like "
+                "'youtube.com'. Use this whenever they ask to open, pull up, or go "
+                "to a site." + shortcut_hint
+            ),
+            parameters={
+                "target": {
+                    "type": "string",
+                    "description": "A web address, or a configured shortcut name",
+                }
+            },
+            required=["target"],
+            func=_open_browser,
+        )
+    )
+
     if settings.pc_power_control_enabled:
 
         def _power(action: str, confirm: bool = False) -> str:

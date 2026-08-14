@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     # JSON object in the env var, matching the shape of CORS_ORIGINS below.
     pc_app_whitelist: dict[str, str] = Field(default_factory=dict, validation_alias="PC_APP_WHITELIST")
 
+    # Named shortcuts for open_in_browser, e.g. {"email": "https://mail.google.com"}.
+    # Purely a convenience: any http/https address still works without being
+    # listed here, so this is not a security boundary — the scheme check in
+    # pc_control.open_url is.
+    pc_url_shortcuts: dict[str, str] = Field(default_factory=dict, validation_alias="PC_URL_SHORTCUTS")
+
     # Which smart home backend to use:
     #   "kasa"           — talk to TP-Link Kasa/Tapo directly on the LAN.
     #                      No extra service to run, but TP-Link only.
