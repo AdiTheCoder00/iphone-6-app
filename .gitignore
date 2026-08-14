@@ -13,3 +13,13 @@ Thumbs.db
 # from package.json + `npm run build`, so neither belongs in the repo.
 node_modules/
 dashboard/dist/
+
+# TLS material for the local HTTPS server. NEVER commit these.
+# A previous commit published the CA private key to a public repo; because the
+# CA is installed as a trusted root on the phone, that key could mint a
+# trusted certificate for ANY domain, not just this project. History was
+# rewritten to remove it and the CA regenerated. Regenerate locally instead —
+# see README.
+certs/
+*.key
+*.pem
