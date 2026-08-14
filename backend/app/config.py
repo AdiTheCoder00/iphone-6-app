@@ -15,7 +15,10 @@ def unrecognized_env_keys() -> list[str]:
     """
     if not _ENV_FILE.is_file():
         return []
-    known = {f.alias for f in Settings.model_fields.values() if f.alias}
+    # validation_alias (not .alias — that is the serialization alias and is
+    # None on fields declared with validation_alias only).
+    known = {f.validation_alias for f in Settings.model_fields.values()
+             if isinstance(f.validation_alias, str)}
     found = []
     for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
         line = line.strip()
