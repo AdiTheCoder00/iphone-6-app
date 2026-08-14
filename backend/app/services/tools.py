@@ -72,8 +72,7 @@ def all_tools() -> list[Tool]:
 
 def render_tool_schemas() -> list[dict]:
     """Ollama's native `tools` format — an OpenAI-style function schema per
-    tool. Used for real tool-calling; render_tool_specs() below is the older
-    prompt-text form, kept only for anything that still wants it."""
+    tool, used for real tool-calling."""
     schemas = []
     for tool in _REGISTRY.values():
         schemas.append(
@@ -98,24 +97,6 @@ def render_tool_schemas() -> list[dict]:
             }
         )
     return schemas
-
-
-def render_tool_specs() -> str:
-    """The tool catalogue as it appears in the system prompt."""
-    lines = []
-    for tool in _REGISTRY.values():
-        if tool.parameters:
-            params = ", ".join(
-                f'"{key}": {spec.get("type", "string")}'
-                + (f' [{"/".join(spec["enum"])}]' if "enum" in spec else "")
-                + ("" if key in tool.required else " (optional)")
-                for key, spec in tool.parameters.items()
-            )
-            arg_hint = "{" + params + "}"
-        else:
-            arg_hint = "{}"
-        lines.append(f"- {tool.name}: {tool.description}\n  args: {arg_hint}")
-    return "\n".join(lines)
 
 
 async def execute(name: str, args: dict | None) -> str:
@@ -824,4 +805,4 @@ def _register_smart_home_tools() -> None:
 _register_smart_home_tools()
 
 
-__all__ = ["Tool", "execute", "render_tool_specs", "all_tools", "get", "register", "MAX_FACTS"]
+__all__ = ["Tool", "execute", "all_tools", "get", "register", "MAX_FACTS"]

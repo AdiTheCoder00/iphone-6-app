@@ -4,6 +4,8 @@ import logging
 import time
 from contextlib import asynccontextmanager, suppress
 
+import httpx
+
 # Route ALL TLS verification through the OS trust store, before anything that
 # opens a connection is imported. services/tools.py builds its own context for
 # the same reason, but third-party libraries construct their own — notably
@@ -16,9 +18,10 @@ truststore.inject_into_ssl()
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import settings
+from app.config import settings, unrecognized_env_keys
 from app.models.schemas import (
     AmbientResponse,
     ChatMessage,
@@ -41,7 +44,7 @@ from app.services import home_assistant, tools, tts
 from app.services.companion import CompanionUnavailable, companion_service
 from app.services.events import event_hub
 from app.services.proactive import proactive_service
-from app.services.reminders import reminder_service
+from app.services.reminders import reminder_event, reminder_service
 from app.services.store import store
 from app.services.transcription import TranscriptionError, transcription_service
 
@@ -64,6 +67,27 @@ def sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject oversized uploads from the Content-Length header before
+    Starlette spools the body to disk. Without this, the /transcribe size cap
+    runs only after the whole upload has been written out, and anyone on the
+    LAN could fill the disk with repeated large POSTs."""
+
+    def __init__(self, app, max_bytes: int) -> None:
+        super().__init__(app)
+        self._max_bytes = max_bytes
+
+    async def dispatch(self, request, call_next):
+        if request.method == "POST" and request.url.path == "/transcribe":
+            length = request.headers.get("content-length")
+            if length and length.isdigit() and int(length) > self._max_bytes:
+                return JSONResponse(
+                    {"detail": f"Audio exceeds {settings.max_audio_mb} MB limit"},
+                    status_code=413,
+                )
+        return await call_next(request)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
@@ -76,6 +100,9 @@ async def lifespan(app: FastAPI):
             "COMPANION_TOKEN is not set — every endpoint is open to anyone who can "
             "reach this port. PC control tools are reachable unauthenticated."
         )
+    unknown = unrecognized_env_keys()
+    if unknown:
+        logger.warning("Unrecognized keys in backend/.env (possible typos): %s", ", ".join(unknown))
     store.init()
     # Reminders that came due while the server was down are NOT lost: they stay
     # pending in SQLite and fire once a client connects (see check_reminders).
@@ -122,17 +149,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Registered last so it runs outermost: reject before auth, spooling or CORS
+# handling — the check is header-only and reveals nothing.
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_bytes=settings.max_audio_mb * 1024 * 1024,
+)
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
+    # Probes run in parallel: the frontend aborts after 5s, and sequential
+    # probes (Ollama 3s + HA 3s) could exceed that on a wedged dependency.
+    ollama_ok, ha_ok = await asyncio.gather(
+        companion_service.is_available(),
+        home_assistant.is_available(),
+    )
     return HealthResponse(
         status="ok",
-        ollama_connected=await companion_service.is_available(),
+        ollama_connected=ollama_ok,
         model=settings.ollama_model,
         model_status=companion_service.model_status,
         tts_enabled=settings.tts_enabled,
-        ha_connected=await home_assistant.is_available(),
+        ha_connected=ha_ok,
     )
 
 
@@ -173,7 +212,7 @@ async def cancel_reminder(reminder_id: int):
     cancelled = await asyncio.to_thread(reminder_service.cancel, reminder_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="No pending reminder with that id")
-    return {"cancelled": reminder_id}
+    return {"removed": reminder_id}
 
 
 @app.post("/reminders/{reminder_id}/snooze", response_model=ReminderOut)
@@ -197,14 +236,14 @@ async def list_facts():
 async def delete_fact(fact_id: int):
     if not await asyncio.to_thread(store.delete_fact, fact_id):
         raise HTTPException(status_code=404, detail="No such fact")
-    return {"deleted": fact_id}
+    return {"removed": fact_id}
 
 
 @app.delete("/facts")
 async def clear_facts():
     removed = await asyncio.to_thread(store.clear_facts)
     logger.info("Cleared %d remembered fact(s)", removed)
-    return {"cleared": removed}
+    return {"removed": removed}
 
 
 # Ambient weather is polled by every idle screen, so it is cached rather than
@@ -246,8 +285,13 @@ async def ambient(city: str = Query("", max_length=100)):
     try:
         summary = tools.format_weather_compact(await tools.fetch_weather(city))
     except Exception as e:
-        # The idle screen shows nothing rather than an error string.
-        logger.info("Ambient weather unavailable for %r: %s", city, e)
+        # The idle screen shows nothing rather than an error string. Expected
+        # failures (unknown city, remote down) are routine; anything else is a
+        # real defect that should surface instead of vanishing at INFO level.
+        if isinstance(e, (ValueError, LookupError, httpx.HTTPError)):
+            logger.info("Ambient weather unavailable for %r: %s", city, e)
+        else:
+            logger.warning("Ambient weather failed unexpectedly for %r: %s", city, e, exc_info=True)
         return AmbientResponse(weather=None)
 
     _cache_ambient(cache_key, summary, now)
@@ -265,7 +309,7 @@ async def get_conversation():
 async def clear_conversation():
     removed = await asyncio.to_thread(store.clear_messages)
     logger.info("Cleared %d stored message(s)", removed)
-    return {"cleared": removed}
+    return {"removed": removed}
 
 
 @app.post("/wake", response_model=WakeResponse)
@@ -277,6 +321,14 @@ async def wake_endpoint(body: WakeRequest):
     utterance cannot start several recordings.
     """
     global _last_wake_at
+
+    # A wake published into the void is wasted, and consuming the debounce for
+    # it would silently swallow a real wake arriving within the window. Refuse
+    # instead, so the board's serial log shows a "no-listener" refusal.
+    if event_hub.subscriber_count == 0:
+        logger.info("Wake from %s ignored (no SSE client connected)", body.source)
+        return WakeResponse(accepted=False, reason="no-listener")
+
     # Monotonic: immune to wall-clock adjustments, which matter on a machine
     # that may sync time while this is running.
     now = time.monotonic()
@@ -320,7 +372,9 @@ async def transcribe_endpoint(audio: UploadFile = File(...)):
         logger.error("Transcription failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
-    logger.info("Transcribed %d bytes -> %r", len(data), text[:120])
+    # Length only — the transcript itself is user speech and does not belong
+    # in the server log.
+    logger.info("Transcribed %d bytes of audio", len(data))
     return TranscribeResponse(text=text)
 
 
@@ -339,7 +393,13 @@ async def events(request: Request):
             yield sse_event({"type": "connected"})
             # Someone is listening again: deliver anything that came due while
             # the screen was off, without waiting up to a full poll interval.
-            await asyncio.to_thread(reminder_service.check_reminders)
+            # Guarded so a transient store error churns the reconnect instead
+            # of killing the stream outright.
+            try:
+                for fired in await asyncio.to_thread(reminder_service.check_reminders):
+                    event_hub.publish(reminder_event(fired))
+            except Exception as e:
+                logger.warning("Reminder check on connect failed: %s", e, exc_info=True)
             while True:
                 try:
                     event = await asyncio.wait_for(

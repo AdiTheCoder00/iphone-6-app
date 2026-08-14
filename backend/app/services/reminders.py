@@ -29,6 +29,17 @@ POLL_INTERVAL_SECONDS = 30
 MAX_LATE_SECONDS = 6 * 3600
 
 
+def reminder_event(reminder: dict) -> dict:
+    """SSE payload for a fired reminder. Kept in one place so the poller and
+    the SSE connect path publish identical events."""
+    return {
+        "type": "reminder",
+        "id": reminder["id"],
+        "text": reminder["text"],
+        "emotion": "happy",
+    }
+
+
 class ReminderService:
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -73,7 +84,17 @@ class ReminderService:
         return matches
 
     def check_reminders(self) -> list[dict]:
-        """Internal, NOT model-facing. Fire everything now due."""
+        """Internal, NOT model-facing. Claim (mark fired) everything now due
+        and return the claimed rows; callers publish them to the SSE hub from
+        the event loop.
+
+        Publishing and claiming are deliberately split: check_reminders runs
+        in a worker thread, and asyncio.Queue (the hub's internals) is not
+        thread-safe. Returning the claims keeps every publish on the loop
+        thread, and the caller publishes immediately after the claim returns,
+        so the window in which a claim could be lost to a disconnect is a few
+        instructions rather than the whole scan.
+        """
         now = time.time()
         due = store.due_reminders(now)
         if not due:
@@ -93,7 +114,9 @@ class ReminderService:
             else:
                 fresh.append(reminder)
 
-        # No listener: leave them pending and try again next tick.
+        # No listener: leave them pending and try again next tick. (Reading
+        # subscriber_count from a worker thread races harmlessly — it only
+        # decides whether to claim now or later.)
         if not fresh or event_hub.subscriber_count == 0:
             if fresh:
                 logger.info("%d reminder(s) due but nobody connected; holding", len(fresh))
@@ -101,27 +124,20 @@ class ReminderService:
 
         fired = []
         for reminder in fresh:
-            # Claim before publishing: if the claim loses a race, another
+            # Claim before returning: if the claim loses a race, another
             # caller already sent this one and we must not send it twice.
-            if not store.mark_fired(reminder["id"]):
-                continue
-            event_hub.publish(
-                {
-                    "type": "reminder",
-                    "id": reminder["id"],
-                    "text": reminder["text"],
-                    "emotion": "happy",
-                }
-            )
-            logger.info("Reminder %d fired: %s", reminder["id"], reminder["text"])
-            fired.append(reminder)
+            if store.mark_fired(reminder["id"]):
+                fired.append(reminder)
         return fired
 
     async def _poll_loop(self) -> None:
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                await asyncio.to_thread(self.check_reminders)
+                # Claims happen in the thread; publishing stays on the loop.
+                for fired in await asyncio.to_thread(self.check_reminders):
+                    event_hub.publish(reminder_event(fired))
+                    logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
             except asyncio.CancelledError:
                 raise
             except Exception as e:

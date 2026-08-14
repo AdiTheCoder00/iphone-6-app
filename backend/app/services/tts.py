@@ -11,9 +11,11 @@ if absent.
 """
 
 import asyncio
+import concurrent.futures
 import io
 import logging
 import shutil
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -34,6 +36,10 @@ _VOICES_URL = (
 # runaway generation, and keeps a single synthesis bounded.
 MAX_TTS_CHARS = 600
 
+# Without a timeout a stalled connection to GitHub would pin the worker
+# thread (and the load lock) forever, hanging every subsequent /speak.
+DOWNLOAD_TIMEOUT_SECONDS = 60
+
 
 class TTSError(Exception):
     """Synthesis failed, or produced no audio."""
@@ -44,6 +50,12 @@ _kokoro = None
 # otherwise each make their own lock and both load the model.
 _load_lock = asyncio.Lock()
 
+# TTS runs on its own single worker: a long load or download must not starve
+# the shared default pool that /chat and the store calls use.
+_TTS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="tts"
+)
+
 
 def _model_dir() -> Path:
     return Path(settings.resolved_tts_model_dir)
@@ -51,11 +63,24 @@ def _model_dir() -> Path:
 
 def _download(url: str, dest: Path) -> None:
     """Stream to a .part file first, so an interrupted download never leaves
-    a truncated file that looks complete on the next boot."""
+    a truncated file that looks complete on the next boot. One retry, then a
+    clear failure — never an unbounded wait."""
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url) as response, open(tmp, "wb") as out:
-        shutil.copyfileobj(response, out, length=256 * 1024)
-    tmp.replace(dest)
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(
+                url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+            ) as response, open(tmp, "wb") as out:
+                shutil.copyfileobj(response, out, length=256 * 1024)
+            tmp.replace(dest)
+            return
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            logger.warning(
+                "TTS download attempt %d of %s failed: %s", attempt, dest.name, e
+            )
+    if tmp.exists():
+        tmp.unlink()
+    raise TTSError(f"could not download {dest.name}")
 
 
 def _init_kokoro():
@@ -78,7 +103,9 @@ async def get_kokoro():
         return _kokoro
     async with _load_lock:
         if _kokoro is None:
-            _kokoro = await asyncio.to_thread(_init_kokoro)
+            _kokoro = await asyncio.get_running_loop().run_in_executor(
+                _TTS_EXECUTOR, _init_kokoro
+            )
             logger.info("Kokoro TTS loaded (voice=%s)", settings.tts_voice)
     return _kokoro
 
@@ -107,4 +134,4 @@ async def synthesize(text: str) -> bytes:
         sf.write(buf, audio, sample_rate, format="WAV")
         return buf.getvalue()
 
-    return await asyncio.to_thread(_run)
+    return await asyncio.get_running_loop().run_in_executor(_TTS_EXECUTOR, _run)

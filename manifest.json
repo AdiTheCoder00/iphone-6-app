@@ -2,6 +2,7 @@
   "name": "Companion",
   "short_name": "Companion",
   "description": "An AI desk companion",
+  "id": "companion",
   "start_url": "companion.html",
   "scope": "./",
   "display": "standalone",

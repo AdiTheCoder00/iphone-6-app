@@ -64,6 +64,9 @@ class Store:
             # WAL so the poller reading due reminders never blocks a write
             # from the chat path.
             self._conn.execute("PRAGMA journal_mode=WAL")
+            # A second process (a stray uvicorn, a DB inspector) would
+            # otherwise raise "database is locked" instead of waiting.
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(SCHEMA)
             self._conn.commit()
         logger.info("Store ready at %s", path)

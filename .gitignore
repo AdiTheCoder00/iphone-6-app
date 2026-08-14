@@ -1,8 +1,10 @@
 __pycache__/
 *.py[cod]
 venv/
+.venv/
 backend/data/
 .env
+firmware/wake_esp32s3/config.h
 *.log
 .DS_Store
 Thumbs.db

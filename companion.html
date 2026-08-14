@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#05070a" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -33,6 +33,12 @@ html, body {
   -webkit-touch-callout: none;
 }
 
+/* ...but model-authored text is worth being able to copy for debugging. */
+.bubble, .rows, .settings__hint {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .stage {
   /* Burn-in mitigation offset, nudged every few minutes from JS. Declared
      here rather than on .face-root so everything that should move together —
@@ -51,8 +57,13 @@ html, body {
   --accent-rgb: 77, 216, 230;
 
   position: relative;
+  /* Design resolution: the iPhone SE 2020 / iPhone 6 screen (375x667 CSS px).
+     The stage never reflows from this. Where the layout viewport is smaller
+     (browser-mode Safari is ~550-600px tall) the whole box is scaled down as
+     a letterbox by fitStage() in JS, so nothing stretches and nothing clips. */
   width: 375px;
   height: 667px;
+  transform-origin: top center;
   margin: 0 auto;
   overflow: hidden;
   display: flex;
@@ -421,10 +432,10 @@ html, body {
   margin-top: 10px;
 }
 .bubble__action {
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 44px;
+  padding: 0 14px;
   border: 1px solid rgba(var(--accent-rgb), 0.4);
-  border-radius: 16px;
+  border-radius: 22px;
   background: rgba(var(--accent-rgb), 0.12);
   color: #dff7fa;
   font: inherit;
@@ -435,10 +446,14 @@ html, body {
 .bubble__action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* With the composer up the bubble would sit under the input, so it moves
-   above it and gives back the height. */
+   above it and gives back the height. Reminder bubbles keep their action
+   row above the fold by staying taller than plain replies. */
 .stage[data-composer="open"] .bubble {
   bottom: calc(156px + var(--kb, 0px));
   max-height: 118px;
+}
+.stage[data-composer="open"] .bubble[data-actions="true"] {
+  max-height: 176px;
 }
 
 .composer {
@@ -618,7 +633,8 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 .retry {
   position: absolute;
   left: 0; right: 0;
-  bottom: 84px;
+  /* Above the bubble (which sits at bottom:86px), so the two never overlap. */
+  bottom: 128px;
   z-index: 4;
   display: flex;
   align-items: center;
@@ -641,10 +657,10 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 }
 @keyframes retryPulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 .retry__connect {
-  min-height: 32px;
-  padding: 0 10px;
+  min-height: 44px;
+  padding: 0 12px;
   border: 1px solid rgba(83, 213, 229, 0.48);
-  border-radius: 16px;
+  border-radius: 22px;
   background: rgba(21, 53, 62, 0.68);
   color: #9debf3;
   font: inherit;
@@ -683,6 +699,14 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   transition: transform 260ms cubic-bezier(0.4,0,0.2,1);
 }
 .settings[data-open="true"] .settings__sheet { transform: translateY(0); }
+
+/* The sheet is bottom-pinned, so without extra room the keyboard covers the
+   Backend URL / token / city inputs the moment one of them is focused. The
+   stage's --kb (keyboard height) becomes bottom padding, letting the fields
+   scroll clear of it. */
+.settings[data-open="true"] .settings__sheet {
+  padding-bottom: calc(22px + var(--kb, 0px));
+}
 
 /* Sticky so the title and the drag handle stay put while the body scrolls —
    without it there is no visual anchor and no hint that the sheet scrolls. */
@@ -724,13 +748,15 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 
 .field__input {
   width: 100%;
-  height: 40px;
+  height: 44px;
   padding: 0 12px;
   border-radius: 10px;
   border: 1px solid rgba(255,255,255,0.09);
   background: #070c10;
   color: #dfe9ee;
-  font-size: 15px;
+  /* 16px, same as the composer input: below that, iOS auto-zooms the whole
+     fixed shell when the field gains focus. */
+  font-size: 16px;
   outline: none;
   -webkit-appearance: none;
   -webkit-user-select: text;
@@ -747,12 +773,14 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   background: #22303a;
   outline: none;
 }
+/* 30px thumb — 22px was hard to grab with a finger on a 4-inch screen. */
 .field__range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 22px; height: 22px;
+  width: 30px; height: 30px;
   border-radius: 50%;
   background: var(--accent);
   cursor: pointer;
+  border: none;
 }
 
 .toggle {
@@ -760,6 +788,8 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  /* 44px total — a comfortable touch target. */
+  min-height: 44px;
   padding: 11px 14px;
   border: 1px solid rgba(255,255,255,0.09);
   border-radius: 10px;
@@ -1256,8 +1286,8 @@ window.Companion = (function () {
         '--mouth-w': '34px', '--mouth-h': '0px', '--mouth-thickness': '4px', '--mouth-radius': '4px',
         '--mouth-opacity': '0', '--mouth-rot': '0deg', '--mouth-flip': '1', '--mouth-shift-y': '0px'
       },
-      /* Rare, long, heavy blinks. */
-      blink: { enabled: true, minDelay: 5000, maxDelay: 11000, duration: 600, doubleChance: 0 }
+      /* Rare, long, heavy blinks — same builder as every other preset. */
+      blink: blink({ minDelay: 5000, maxDelay: 11000, duration: 600, doubleChance: 0 })
     }
   };
 
@@ -1481,6 +1511,10 @@ window.CompanionSpeech = (function () {
   var wired = false;          // MediaElementSource can only be created once
   var rafId = null;
   var currentUrl = null;
+  /* Monotonic per speak() call: a stale in-flight /speak resolution must not
+     overwrite the audio element of a newer take (or revive one that was
+     cancelled) — and must release its own object URL instead of leaking it. */
+  var speakGeneration = 0;
 
   /* iOS will not start audio that was not initiated by a user gesture, and an
      AudioContext starts suspended until one occurs. Both are unlocked on the
@@ -1546,6 +1580,9 @@ window.CompanionSpeech = (function () {
   audio.addEventListener('error', cleanup);
 
   function cancel() {
+    /* Any speak still in flight is now stale: a cancel while its /speak
+       fetch resolves must not revive it. */
+    speakGeneration++;
     try { audio.pause(); } catch (e) {}
     audio.currentTime = 0;
     cleanup();
@@ -1557,6 +1594,7 @@ window.CompanionSpeech = (function () {
     if (window.CompanionConfig.get('sleepNow')) return;
     if (!text) return;
 
+    var mySpeak = ++speakGeneration;
     cancel();                                  // a new reply supersedes an old one
 
     try {
@@ -1568,6 +1606,11 @@ window.CompanionSpeech = (function () {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var blob = await res.blob();
 
+      /* A newer speak (or a cancel) took over while this was in flight —
+         releasing this blob instead of orphaning a second object URL. */
+      if (mySpeak !== speakGeneration) return;
+
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
       currentUrl = URL.createObjectURL(blob);
       audio.src = currentUrl;
       unlock();
@@ -1578,7 +1621,7 @@ window.CompanionSpeech = (function () {
     } catch (e) {
       /* Silence is an acceptable outcome — the bubble already has the text. */
       console.info('[Companion] speech unavailable:', e && (e.name || e.message));
-      cleanup();
+      if (mySpeak === speakGeneration) cleanup();
     }
   }
 
@@ -1597,10 +1640,21 @@ window.CompanionChat = (function () {
   var BUBBLE_MIN_MS = 2600;      // floor on how long a reply stays up
   var BUBBLE_PER_CHAR_MS = 45;
   var BUBBLE_MAX_MS = 7000;
+  var BUBBLE_ACTION_MAX_MS = 12000;   // reminder bubbles with Done/Snooze
   var ERROR_TEXT = 'having trouble thinking right now';
   var AUTH_ERROR_TEXT = 'my access token is wrong — check settings';
   var SSE_RETRY_MS = 3000;       // reconnect delay after a dropped stream
   var CHAT_REQUEST_TIMEOUT_MS = 75000;
+  /* Only the most recent turns are useful context for the model, and the full
+     in-memory conversation grows all day on a 1GB phone. Capped client-side
+     as well as server-side so the POST payload stays bounded. */
+  var HISTORY_LIMIT = 20;
+  /* iOS can kill an EventSource without firing onerror (backgrounding, a
+     Wi-Fi/cellular switch, an idle proxy), and the backend keepalive is a
+     comment-only line that never reaches onmessage. Silence is the only
+     signal: if nothing arrives for three keepalive intervals, reconnect on
+     purpose. */
+  var SSE_STALL_MS = 3 * 15 * 1000;
 
   var toggle = document.getElementById('chatToggle');
   var composer = document.getElementById('composer');
@@ -1661,7 +1715,12 @@ window.CompanionChat = (function () {
     }
     bubble.setAttribute('data-visible', 'true');
 
-    var hold = actions ? BUBBLE_MAX_MS : Math.min(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS);
+    var hold = actions
+      /* Action rows (reminder Done/Snooze) need reading time; a long
+         reminder is capped higher than a plain reply so it does not vanish
+         mid-read, with BUBBLE_MAX_MS as the floor. */
+      ? Math.min(BUBBLE_ACTION_MAX_MS, Math.max(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS))
+      : Math.min(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS);
     bubbleTimer = setTimeout(function () {
       bubbleTimer = null;
       if (myBubble !== bubbleId) return;     // a newer bubble already took over
@@ -1726,7 +1785,10 @@ window.CompanionChat = (function () {
       var res = await window.CompanionConfig.request('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history: conversation.slice(0, -1) })
+        body: JSON.stringify({
+          message: text,
+          history: conversation.slice(0, -1).slice(-HISTORY_LIMIT)
+        })
       }, CHAT_REQUEST_TIMEOUT_MS);
       /* 401 is worth calling out by name. "Having trouble thinking" would send
          the user hunting for a backend fault when the real problem is a token
@@ -1787,6 +1849,9 @@ window.CompanionChat = (function () {
      the chat bubble so a pushed reminder and a spoken reply look identical. */
   var sse = null;
   var sseRetryTimer = null;
+  var sseGeneration = 0;
+  var sseLastEventAt = 0;
+  var sseWatchdogTimer = null;
 
   function scheduleReconnect() {
     if (sseRetryTimer !== null) return;       // a retry is already pending
@@ -1797,6 +1862,7 @@ window.CompanionChat = (function () {
   }
 
   function connectEvents() {
+    var myGen = ++sseGeneration;
     if (sse) { try { sse.close(); } catch (e) {} sse = null; }
 
     try {
@@ -1808,6 +1874,8 @@ window.CompanionChat = (function () {
     }
 
     sse.onmessage = function (e) {
+      if (myGen !== sseGeneration) return;    // a newer stream owns the slot
+      sseLastEventAt = Date.now();
       var event;
       try { event = JSON.parse(e.data); } catch (err) { return; }
 
@@ -1830,10 +1898,12 @@ window.CompanionChat = (function () {
     };
 
     sse.onerror = function () {
+      if (myGen !== sseGeneration) return;
       /* EventSource retries on its own for transient drops but gives up once
          the connection is closed (a backend restart), so drive it explicitly
          on a fixed 3s cadence instead of trusting the built-in behaviour. */
       console.warn('[Companion] event stream lost, retrying in ' + SSE_RETRY_MS + 'ms');
+      sseLastEventAt = Date.now();    // the retry loop is live; the watchdog need not also fire
       if (sse) { try { sse.close(); } catch (err) {} sse = null; }
       scheduleReconnect();
     };
@@ -1841,15 +1911,31 @@ window.CompanionChat = (function () {
 
   connectEvents();
 
+  /* One watchdog for the stream's whole lifetime: if nothing at all arrived
+     for SSE_STALL_MS while the page is visible, the connection is a corpse
+     that iOS forgot to report. Close it and let the normal path reconnect. */
+  sseWatchdogTimer = setInterval(function () {
+    if (document.hidden) return;              // backgrounded tabs must not churn
+    if (Date.now() - sseLastEventAt > SSE_STALL_MS) {
+      console.warn('[Companion] event stream silent for ' + SSE_STALL_MS + 'ms — reconnecting');
+      connectEvents();
+    }
+  }, SSE_STALL_MS / 3);
+
   /* Replay stored history so a reloaded PWA is not meeting the user for the
      first time. Only seeds an untouched conversation — if they already typed
      something while this was in flight, that turn wins. */
+  var historyGeneration = 0;
   async function loadHistory() {
+    var myGen = ++historyGeneration;
     try {
       var res = await window.CompanionConfig.request('/conversation');
       if (!res.ok) return;
       var data = await res.json();
-      if (conversation.length === 0 && Array.isArray(data.messages) && data.messages.length) {
+      /* A "forget" (or a new turn) can land while this is in flight; a stale
+         response must not resurrect a conversation that was just cleared. */
+      if (myGen === historyGeneration && conversation.length === 0 &&
+          Array.isArray(data.messages) && data.messages.length) {
         conversation = data.messages.slice();
         console.info('[Companion] restored ' + conversation.length + ' message(s)');
       }
@@ -1860,6 +1946,7 @@ window.CompanionChat = (function () {
   loadHistory();
 
   async function clearHistory() {
+    historyGeneration++;                       // any in-flight restore is now stale
     conversation = [];
     try {
       await window.CompanionConfig.request('/conversation', { method: 'DELETE' });
@@ -1888,8 +1975,7 @@ window.CompanionChat = (function () {
     openComposer: openComposer,
     closeComposer: closeComposer,
     loadHistory: loadHistory,
-    clearHistory: clearHistory,
-    historyLength: function () { return conversation.length; }
+    clearHistory: clearHistory
   };
 })();
 
@@ -1996,6 +2082,22 @@ window.CompanionGlance = (function () {
   var dimValue = document.getElementById('setDimValue');
   var sleepBtn = document.getElementById('setSleep');
   var sleepState = document.getElementById('setSleepState');
+
+  /* --- design-resolution lock ---------------------------------------------
+     The stage is a fixed 375x667 box (iPhone SE 2020 / iPhone 6). Installed
+     as a PWA it fills the device exactly. In browser-mode Safari the layout
+     viewport is shorter (~550-600px), so instead of reflowing the layout the
+     whole stage is scaled down as a letterbox — the design resolution never
+     changes. Scale divides the keyboard inset so --kb stays in stage pixels. */
+  var STAGE_WIDTH = 375;
+  var STAGE_HEIGHT = 667;
+  var stageScale = 1;
+  var fitStage = function () {
+    stageScale = Math.min(1, window.innerWidth / STAGE_WIDTH, window.innerHeight / STAGE_HEIGHT);
+    stage.style.transform = stageScale < 1 ? 'scale(' + stageScale + ')' : '';
+  };
+  window.addEventListener('resize', fitStage);
+  fitStage();
 
   /* --- standalone detection ----------------------------------------------
      navigator.standalone is the iOS-specific signal for "added to home
@@ -2117,7 +2219,6 @@ window.CompanionGlance = (function () {
     if (e.key === 'Enter') backendInput.blur();
   });
 
-  /* --- weather city ------------------------------------------------------- */
   /* --- access token ------------------------------------------------------- */
   var tokenInput = document.getElementById('setToken');
   tokenInput.value = window.CompanionConfig.get('token');
@@ -2126,6 +2227,7 @@ window.CompanionGlance = (function () {
     checkHealth();
   });
 
+  /* --- weather city ------------------------------------------------------- */
   var cityInput = document.getElementById('setCity');
   cityInput.value = window.CompanionConfig.get('city');
   cityInput.addEventListener('change', function () {
@@ -2414,8 +2516,10 @@ window.CompanionGlance = (function () {
     var vv = window.visualViewport;
     var applyKeyboardInset = function () {
       var covered = window.innerHeight - vv.height - vv.offsetTop;
-      /* Small negative values show up from rounding and rubber-banding. */
-      stage.style.setProperty('--kb', (covered > 8 ? Math.round(covered) : 0) + 'px');
+      /* Small negative values show up from rounding and rubber-banding.
+         Divided by stageScale because the keyboard covers device pixels while
+         --kb is consumed inside the scaled stage (stage pixels). */
+      stage.style.setProperty('--kb', (covered > 8 ? Math.round(covered / stageScale) : 0) + 'px');
     };
     vv.addEventListener('resize', applyKeyboardInset);
     vv.addEventListener('scroll', applyKeyboardInset);
@@ -2429,7 +2533,9 @@ window.CompanionGlance = (function () {
      nothing. Serve over HTTPS (or localhost) to actually get it. */
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').then(function () {
+      /* updateViaCache:'none' stops iOS serving a stale sw.js for up to 24h
+         and keeps the shell cache in sync with deploys. */
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function () {
         console.info('[Companion] service worker registered');
       }).catch(function (e) {
         console.info('[Companion] service worker not registered:', e && e.message);
@@ -2441,16 +2547,6 @@ window.CompanionGlance = (function () {
   applySleep();
   applyVoice();
   checkHealth();
-
-  /* Exposed for the settings gesture to be testable and for later layers. */
-  window.CompanionKiosk = {
-    openSettings: openSettings,
-    closeSettings: closeSettings,
-    checkHealth: checkHealth,
-    loadReminders: loadReminders,
-    loadFacts: loadFacts,
-    isStandalone: isStandalone
-  };
 })();
 
 
@@ -2487,6 +2583,10 @@ window.CompanionVoice = (function () {
   var stopTimer = null;
   var autoStopTimer = null;
   var recording = false;
+  /* Each press (or wake auto-record) gets a new take id. A take whose id is
+     no longer current must not report its clip or touch the shared recorder/
+     stream/chunks vars — its onstop can fire after a newer take has begun. */
+  var takeId = 0;
   var granted = false;
   /* Set once the user has seen the explanation, so it appears only once. */
   var explained = false;
@@ -2540,14 +2640,17 @@ window.CompanionVoice = (function () {
 
     if (!granted && !explained) { micPrompt.setAttribute('data-open', 'true'); return; }
 
+    var myTake = ++takeId;
     recording = true;
     micBtn.setAttribute('data-recording', 'true');
     window.Companion.setEmotion('listen');
 
+    var takeStream;
     try {
-      stream = await acquireStream();
+      takeStream = await acquireStream();
       granted = true;
     } catch (e) {
+      if (myTake !== takeId) return;          // superseded while waiting
       recording = false;
       micBtn.setAttribute('data-recording', 'false');
       window.Companion.setEmotion('idle');
@@ -2563,36 +2666,47 @@ window.CompanionVoice = (function () {
     }
 
     /* The press may have ended while getUserMedia was still resolving. */
-    if (!recording) { releaseStream(); return; }
+    if (!recording || myTake !== takeId) {
+      takeStream.getTracks().forEach(function (t) { t.stop(); });
+      return;
+    }
+    stream = takeStream;
 
     chunks = [];
     var mimeType = pickMimeType();
+    var myRecorder;
     try {
-      recorder = mimeType ? new MediaRecorder(stream, { mimeType: mimeType })
-                          : new MediaRecorder(stream);
+      myRecorder = mimeType ? new MediaRecorder(takeStream, { mimeType: mimeType })
+                            : new MediaRecorder(takeStream);
     } catch (e) {
       console.error('[Companion] MediaRecorder failed:', e);
-      releaseStream();
+      takeStream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null;
       recording = false;
       micBtn.setAttribute('data-recording', 'false');
       window.Companion.setEmotion('idle');
       disableVoice('MediaRecorder construction failed');
       return;
     }
+    recorder = myRecorder;
 
-    recorder.ondataavailable = function (e) {
+    myRecorder.ondataavailable = function (e) {
       if (e.data && e.data.size > 0) chunks.push(e.data);
     };
-    recorder.onstop = function () {
-      var type = recorder && recorder.mimeType ? recorder.mimeType : 'audio/webm';
+    myRecorder.onstop = function () {
+      /* Stop this take's own hardware — the shared `stream` var may already
+         belong to a newer take. */
+      takeStream.getTracks().forEach(function (t) { t.stop(); });
+      if (stream === takeStream) stream = null;
+      if (myTake !== takeId) return;          // superseded: drop the clip
+      var type = myRecorder.mimeType ? myRecorder.mimeType : 'audio/webm';
       var blob = new Blob(chunks, { type: type });
       chunks = [];
-      releaseStream();
       handleClip(blob, Date.now() - startedAt);
     };
 
     startedAt = Date.now();
-    recorder.start();
+    myRecorder.start();
     stopTimer = setTimeout(function () { stopTimer = null; endRecording(); }, MAX_RECORD_MS);
   }
 
@@ -2701,13 +2815,19 @@ window.CompanionVoice = (function () {
   if (window.PointerEvent) {
     micBtn.addEventListener('pointerdown', function (e) {
       e.preventDefault();
+      /* Capture the pointer so a finger sliding a few px off the button does
+         not end the take — it will drift on a 52px target on a 4-inch screen.
+         Release and cancel still end it, wherever the finger is. */
+      if (micBtn.setPointerCapture) {
+        try { micBtn.setPointerCapture(e.pointerId); } catch (err) {}
+      }
       beginRecording();
     });
-    /* Release, cancel and pointer-leave all end the take: a finger sliding off
-       the button must not leave it recording forever. */
+    /* No pointerleave: with capture it no longer fires mid-hold (the point of
+       the change), and without capture aborting on a slide-off would make the
+       take unusably twitchy. */
     micBtn.addEventListener('pointerup', endRecording);
     micBtn.addEventListener('pointercancel', endRecording);
-    micBtn.addEventListener('pointerleave', endRecording);
   } else {
     micBtn.addEventListener('touchstart', function (e) {
       e.preventDefault();
@@ -2718,7 +2838,6 @@ window.CompanionVoice = (function () {
   }
 
   return {
-    isSupported: function () { return supported; },
     isRecording: function () { return recording; },
     beginRecording: beginRecording,
     endRecording: endRecording,

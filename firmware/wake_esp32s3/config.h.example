@@ -1,0 +1,30 @@
+/* Machine-specific configuration for the wake board.
+ *
+ * Copy this file to config.h and fill in the three values. config.h is
+ * gitignored — the backend token must never enter the repository, and the
+ * .ino refuses to compile until config.h exists with COMPANION_CONFIG_PROVIDED
+ * defined.
+ */
+
+#ifndef COMPANION_CONFIG_H
+#define COMPANION_CONFIG_H
+
+/* Mark that this is the real, local config file — do NOT copy this line into
+ * a committed file. The .ino #errors if this macro is missing. */
+#define COMPANION_CONFIG_PROVIDED
+
+/* Your WiFi network. */
+static const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+static const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+/* The machine running uvicorn. Must be reachable from the board — same LAN,
+ * and the backend started with --host 0.0.0.0 rather than 127.0.0.1. */
+static const char* BACKEND_HOST = "192.168.31.139";
+static const uint16_t BACKEND_PORT = 8000;
+
+/* Must match COMPANION_TOKEN in backend/.env. The backend rejects /wake with
+ * 401 without it, so a board flashed with the wrong value will look like a
+ * dead microphone — check the serial log, the POST result is printed there. */
+static const char* BACKEND_TOKEN = "PASTE_COMPANION_TOKEN_HERE";
+
+#endif /* COMPANION_CONFIG_H */

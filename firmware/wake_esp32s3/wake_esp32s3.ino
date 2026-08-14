@@ -54,19 +54,17 @@
 #define BOARD_XIAO_ESP32S3_SENSE
 // #define BOARD_DEVKITC_INMP441
 
-/* --- your network and backend --------------------------------------------- */
-static const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-static const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+/* --- your network and backend ---------------------------------------------
+ * Machine-specific values live in config.h (WiFi, backend address, token).
+ * It is gitignored so the backend token never enters the repository. Copy
+ * config.h.example to config.h and fill it in; this file refuses to compile
+ * until that is done, so a half-configured board cannot be flashed silently.
+ */
+#include "config.h"
 
-/* The machine running uvicorn. Must be reachable from the board — same LAN,
- * and the backend started with --host 0.0.0.0 rather than 127.0.0.1. */
-static const char* BACKEND_HOST = "192.168.1.20";
-static const uint16_t BACKEND_PORT = 8000;
-
-/* Must match COMPANION_TOKEN in backend/.env. The backend rejects /wake with
- * 401 without it, so a board flashed with the wrong value will look like a
- * dead microphone — check the serial log, the POST result is printed there. */
-static const char* BACKEND_TOKEN = "PASTE_COMPANION_TOKEN_HERE";
+#ifndef COMPANION_CONFIG_PROVIDED
+  #error "Missing wake_esp32s3/config.h — copy config.h.example to config.h and set WIFI_SSID, WIFI_PASSWORD, BACKEND_HOST and BACKEND_TOKEN."
+#endif
 
 /* --- audio ---------------------------------------------------------------- */
 static const uint32_t SAMPLE_RATE = 16000;
@@ -107,27 +105,37 @@ static bool      noiseFloorPrimed = false;
 
 /* --- setup ---------------------------------------------------------------- */
 
-static void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+/* Non-blocking WiFi: starts a connect attempt on the first call, then just
+ * polls status on later calls. Never delays — the audio loop keeps reading
+ * I2S throughout an outage, so the detector stays live even with no network.
+ * A failed attempt is retried on the next loop() pass. */
+static uint32_t wifiAttemptStart = 0;
+static bool     wifiAttempting   = false;
 
-  Serial.printf("[wifi] connecting to %s", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  /* Sleep would save power but adds latency to every POST and can drop the
-   * association on some APs. This board is mains-powered on a desk. */
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  uint32_t started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < 20000) {
-    delay(400);
-    Serial.print(".");
-  }
-  Serial.println();
-
+static void ensureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("[wifi] connected, ip=");
-    Serial.println(WiFi.localIP());
-  } else {
+    if (wifiAttempting) {
+      wifiAttempting = false;
+      Serial.print("[wifi] connected, ip=");
+      Serial.println(WiFi.localIP());
+    }
+    return;
+  }
+
+  if (!wifiAttempting) {
+    wifiAttempting = true;
+    wifiAttemptStart = millis();
+    WiFi.mode(WIFI_STA);
+    /* Sleep would save power but adds latency to every POST and can drop the
+     * association on some APs. This board is mains-powered on a desk. */
+    WiFi.setSleep(false);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("[wifi] connecting to %s\n", WIFI_SSID);
+    return;
+  }
+
+  if (millis() - wifiAttemptStart > 20000) {
+    wifiAttempting = false;
     Serial.println("[wifi] FAILED — will retry in loop()");
   }
 }
@@ -181,11 +189,16 @@ void setup() {
   delay(400);                       // let USB CDC enumerate before printing
   Serial.println("\n[boot] companion wake trigger");
 
+  if (strcmp(BACKEND_TOKEN, "PASTE_COMPANION_TOKEN_HERE") == 0) {
+    Serial.println("[config] BACKEND_TOKEN is still the placeholder — set your real token in config.h");
+    while (true) delay(1000);       // fail fast, visibly, instead of flashing a 401ing board
+  }
+
+  ensureWiFi();                     // kicks off the attempt, returns immediately
   if (!startMicrophone()) {
     Serial.println("[boot] microphone unavailable — halted");
     while (true) delay(1000);
   }
-  connectWiFi();
 }
 
 /* --- detector -------------------------------------------------------------
@@ -196,9 +209,14 @@ void setup() {
 static float blockRms(const int16_t* samples, size_t count) {
   /* double accumulator: 512 squared int16s overflow a float's precision
    * budget quickly enough to skew the result. */
-  double sum = 0.0;
+  double sum = 0.0, mean = 0.0;
+  /* AC RMS: subtract the block mean first. MEMS/PDM mics carry a large DC
+   * bias (INMP441 especially), and without removal the floor is dominated by
+   * it, corrupting the noise-floor threshold. */
+  for (size_t i = 0; i < count; i++) mean += (double)samples[i];
+  mean /= (double)count;
   for (size_t i = 0; i < count; i++) {
-    double s = (double)samples[i];
+    double s = (double)samples[i] - mean;
     sum += s * s;
   }
   return (float)sqrt(sum / (double)count);
@@ -277,15 +295,10 @@ static void postWake() {
 /* --- loop ----------------------------------------------------------------- */
 
 void loop() {
-  /* Reconnect opportunistically; listening continues either way, so a WiFi
+  /* Reconnect opportunistically, never blocking: ensureWiFi() starts an
+   * attempt and returns; the detector keeps listening either way, so a WiFi
    * outage costs triggers but never wedges the board. */
-  if (WiFi.status() != WL_CONNECTED) {
-    static uint32_t lastRetry = 0;
-    if (millis() - lastRetry > 10000) {
-      lastRetry = millis();
-      connectWiFi();
-    }
-  }
+  ensureWiFi();
 
   const size_t wanted = SAMPLES_PER_BLOCK * sizeof(int16_t);
   const size_t got = I2S.readBytes((char*)sampleBuffer, wanted);

@@ -40,13 +40,27 @@ Create `backend/.env` to override settings without changing code:
 ```dotenv
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen3:8b
+COMPANION_TOKEN=change-me-to-a-long-random-string
 TTS_ENABLED=true
 WHISPER_MODEL_SIZE=base
 CONVERSATION_STORE_LIMIT=500
 ```
 
-See `backend/app/config.py` for all available settings. Runtime data is stored
-under `backend/data/` and is ignored by Git.
+`COMPANION_TOKEN` gates every endpoint (except `/health`). If it is unset the
+server logs a warning and runs open — fine on a trusted LAN, dangerous
+anywhere else. See `backend/app/config.py` for all available settings. Runtime
+data is stored under `backend/data/` and is ignored by Git.
+
+## ESP32-S3 wake board
+
+Machine-specific values live in `firmware/wake_esp32s3/config.h` (gitignored):
+
+1. Copy `config.h.example` to `config.h` and fill in `WIFI_SSID`,
+   `WIFI_PASSWORD`, `BACKEND_HOST` (your computer's LAN IP) and
+   `BACKEND_TOKEN` (same value as `COMPANION_TOKEN` above).
+2. Open `firmware/wake_esp32s3/wake_esp32s3.ino` in the Arduino IDE, select the
+   ESP32-S3 board, and flash. The sketch refuses to compile until `config.h`
+   exists, so a half-configured board cannot be flashed silently.
 
 ## Notes
 

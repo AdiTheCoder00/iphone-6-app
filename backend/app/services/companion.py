@@ -226,27 +226,6 @@ def parse_model_output(raw: str) -> tuple[str, str]:
     return reply, _normalize_emotion(payload.get("emotion"))
 
 
-# Not used by chat() any more — tool routing went from this prompt-JSON
-# scheme to Ollama's native tool-calling (see CompanionService.chat), which
-# measured far more reliable. Kept for anything that still wants to parse a
-# model's free-text {"tool": ...} attempt.
-def parse_tool_request(raw: str) -> tuple[str, dict] | None:
-    """Return (name, args) if the model asked for a tool, otherwise None.
-
-    A payload carrying both "tool" and "reply" resolves to the tool: a reply
-    written before the data arrives is a guess, and the second pass will
-    produce a grounded one.
-    """
-    payload = _extract_json_object(_strip_wrappers(raw))
-    if not isinstance(payload, dict):
-        return None
-    name = payload.get("tool")
-    if not isinstance(name, str) or not name.strip():
-        return None
-    args = payload.get("args")
-    return name.strip(), args if isinstance(args, dict) else {}
-
-
 class CompanionService:
     """Chat against a local Ollama model, with a bounded tool loop."""
 
@@ -417,8 +396,9 @@ class CompanionService:
 
         A tool call is executed and its result fed back as a "tool" message;
         the loop continues until the model answers in plain text or
-        MAX_TOOL_CALLS is spent, at which point tools are withheld so a final
-        answer is the only thing the model can produce.
+        MAX_TOOL_CALLS is spent. Withholding the tools schema after the budget
+        discourages further calls; if the model still emits one, the loop
+        terminates from the text anyway rather than executing past the budget.
 
         Raises CompanionUnavailable when Ollama is unreachable or errors, so
         the route can answer with the frontend's "sad" fallback path.
@@ -436,8 +416,9 @@ class CompanionService:
             forced = tool_calls_used >= MAX_TOOL_CALLS
             # The nudge is passed per-call rather than appended to `messages`,
             # so it cannot accumulate across iterations. Tools are withheld
-            # entirely once forced, so a further call is not just discouraged
-            # but structurally impossible.
+            # entirely once forced, so a further call is structurally
+            # impossible in the schema — and even if the model emits one
+            # anyway, the budget check below refuses to execute it.
             call_messages = (
                 messages + [{"role": "system", "content": FINAL_ANSWER_NUDGE}]
                 if forced
@@ -448,7 +429,10 @@ class CompanionService:
             )
             calls = reply_msg.get("tool_calls") or []
 
-            if not calls:
+            # Budget spent yet the model still asked for a tool (it
+            # occasionally does): answer from the text it produced and stop.
+            # Executing another round could otherwise loop forever.
+            if not calls or tool_calls_used >= MAX_TOOL_CALLS:
                 reply = _normalize_reply(reply_msg.get("content"))
                 if not reply:
                     logger.error("Model produced an empty reply")
@@ -480,7 +464,15 @@ class CompanionService:
                     args = {}
                 result = await tools.execute(name, args)
                 tool_calls_used += 1
-                logger.info("Tool %s(%s) -> %s", name, args, result[:200])
+                # Argument values and tool results carry user content
+                # (reminder text, device names); keep the log to shape only.
+                logger.info(
+                    "Tool %s called with %d argument(s); result %d chars",
+                    name,
+                    len(args),
+                    len(result),
+                )
+                logger.debug("Tool %s args=%r result=%r", name, args, result)
                 messages.append({"role": "tool", "content": result, "name": name})
 
     async def prewarm(self) -> None:

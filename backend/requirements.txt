@@ -45,7 +45,9 @@ comtypes>=1.4,<2; sys_platform == "win32"
 # Now-playing track info, via the same System Media Transport Controls session
 # Windows' own volume flyout mini-player reads. winsdk is Microsoft's official
 # WinRT projection for Python. Windows-only.
-winsdk>=1.0,<2; sys_platform == "win32"
+# NOTE: winsdk has no stable release yet (1.0.0b10 is the latest); the pin
+# names the beta explicitly so pip will accept it.
+winsdk>=1.0.0b10,<2; sys_platform == "win32"
 
 # CPU/RAM/battery stats for get_system_stats. Cross-platform, unlike the rest
 # of pc_control.py, but the tool itself is still Windows-only for now (no

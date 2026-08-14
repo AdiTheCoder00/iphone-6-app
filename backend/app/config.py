@@ -6,6 +6,27 @@ from pydantic_settings import BaseSettings
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
+def unrecognized_env_keys() -> list[str]:
+    """Keys written in backend/.env that no setting consumes.
+
+    extra="ignore" is required — the process environment carries PATH and
+    friends — so a misspelled key in .env silently falls back to its default.
+    This surfaces those typos instead.
+    """
+    if not _ENV_FILE.is_file():
+        return []
+    known = {f.alias for f in Settings.model_fields.values() if f.alias}
+    found = []
+    for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key and key not in known:
+            found.append(key)
+    return found
+
+
 class Settings(BaseSettings):
     model_config = ConfigDict(
         env_file=str(_ENV_FILE),
