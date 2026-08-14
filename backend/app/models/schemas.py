@@ -70,6 +70,11 @@ class ReminderOut(BaseModel):
     text: str
     # Epoch seconds; the frontend formats it in the device's own timezone.
     fire_time: float
+    # NULL for one-shot; "daily" or "weekly" when it re-arms after firing.
+    repeat: str | None = None
+    # NULL normally; set when the reminder executes a PC power action
+    # (scheduled sleep/shutdown/lock).
+    power_action: str | None = None
 
 
 class SnoozeReminderRequest(BaseModel):

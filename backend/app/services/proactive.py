@@ -40,6 +40,14 @@ _FALLBACK_MORNING = [
     "good morning — here when you need me.",
     "morning. the desk missed you.",
 ]
+_FALLBACK_RAIN = [
+    "looks like rain today — maybe grab an umbrella on the way out.",
+    "rain's in the forecast. the plants might appreciate it.",
+]
+_FALLBACK_BATTERY = [
+    "your battery is getting low — worth plugging in?",
+    "battery's running down. a charge now saves hunting for a socket later.",
+]
 _FALLBACK_SESSION = [
     "you've been at it a while. worth a stretch?",
     "long session. maybe get some water?",
@@ -55,6 +63,8 @@ class ProactiveService:
         self._task: asyncio.Task | None = None
         # Monotonic timestamps of the last push per trigger.
         self._last_morning_date: str | None = None
+        self._last_rain_date: str | None = None
+        self._last_battery_nudge = 0.0
         self._last_session_nudge = 0.0
         self._last_idle_nudge = 0.0
         # Set by the chat route on every user message, so "idle" means idle
@@ -91,6 +101,27 @@ class ProactiveService:
         event_hub.publish({"type": "proactive", "text": text, "emotion": emotion})
         logger.info("Proactive push: %r (%s)", text, emotion)
 
+    async def _morning_instruction(self) -> str:
+        """Morning greeting with today's briefing folded in.
+
+        The briefing assembly never raises and needs no Ollama, so even when
+        it is empty (no weather city configured) the greeting itself survives.
+        """
+        briefing = ""
+        try:
+            from app.services import tools as tools_module
+
+            briefing = await tools_module._get_briefing()
+        except Exception as e:
+            logger.info("Morning briefing unavailable: %s", e)
+        if not briefing:
+            return "Greet the user good morning in your own words. One short sentence."
+        return (
+            "Greet the user good morning in your own words, then a very short digest. "
+            f"Only include the parts below that say something: {briefing} "
+            "Two short sentences at most, warm and plain."
+        )
+
     async def _tick(self) -> None:
         if not settings.proactive_enabled:
             return
@@ -116,12 +147,59 @@ class ProactiveService:
             and now.hour == settings.proactive_morning_hour
         ):
             self._last_morning_date = today
-            await self._push(
-                "Greet the user good morning in your own words. One short sentence.",
-                _FALLBACK_MORNING,
-                "happy",
-            )
+            await self._push(self._morning_instruction(), _FALLBACK_MORNING, "happy")
             return
+
+        # --- rain alert: once per day when today's forecast says rain
+        # Checking once per day is the point; whether the check succeeds, mark
+        # the date so a flaky feed does not retry every minute.
+        if (
+            settings.rain_alert_threshold > 0
+            and settings.weather_city
+            and self._last_rain_date != today
+        ):
+            self._last_rain_date = today
+            try:
+                from app.services import tools as tools_module
+
+                forecast = await tools_module.fetch_forecast(settings.weather_city)
+                prob = forecast.get("today_precip_prob") or 0
+                if prob >= settings.rain_alert_threshold:
+                    await self._push(
+                        f"Rain is likely in {forecast['label']} today "
+                        f"({prob:.0f}% chance). Mention it in one short sentence, "
+                        "and suggest an umbrella if it fits the tone.",
+                        _FALLBACK_RAIN,
+                        "happy",
+                    )
+                    return
+            except Exception as e:
+                logger.info("Rain check skipped: %s", e)
+
+        # --- battery-low nudge (laptops only; desktops have no battery)
+        if (
+            settings.battery_alert_threshold > 0
+            and mono - self._last_battery_nudge
+            >= settings.battery_alert_interval_hours * 3600.0
+        ):
+            self._last_battery_nudge = mono
+            try:
+                from app.services import pc_control
+
+                # system_stats() samples CPU over a blocking 0.3s window; the
+                # proactive loop must not stall SSE keepalives for it.
+                stats = await asyncio.to_thread(pc_control.system_stats)
+                percent = stats.get("battery_percent")
+                if percent is not None and percent <= settings.battery_alert_threshold:
+                    await self._push(
+                        f"The user's laptop battery is at {percent}%. Nudge them to "
+                        "plug in, in one short warm sentence.",
+                        _FALLBACK_BATTERY,
+                        "happy",
+                    )
+                    return
+            except Exception as e:
+                logger.info("Battery check skipped: %s", e)
 
         # --- long unbroken session
         session_hours = (mono - self._session_started) / 3600.0

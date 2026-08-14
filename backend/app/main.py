@@ -1,8 +1,11 @@
 import asyncio
+import base64
 import json
 import logging
+import tempfile
 import time
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 import httpx
 
@@ -18,7 +21,7 @@ truststore.inject_into_ssl()
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings, unrecognized_env_keys
@@ -45,8 +48,12 @@ from app.models.schemas import (
     WakeResponse,
 )
 from app.middleware import CompanionTokenMiddleware
-from app.services import smart_home, tools, tts
-from app.services.companion import CompanionUnavailable, companion_service
+from app.services import smart_home, timers, tools, tts
+from app.services.companion import (
+    CompanionUnavailable,
+    companion_service,
+    describe_image,
+)
 from app.services.events import event_hub
 from app.services.proactive import proactive_service
 from app.services.reminders import reminder_event, reminder_service
@@ -112,23 +119,31 @@ async def lifespan(app: FastAPI):
     # Reminders that came due while the server was down are NOT lost: they stay
     # pending in SQLite and fire once a client connects (see check_reminders).
     reminder_service.start()
+    timers.timer_service.start()
     proactive_service.start()
 
     # Deliberately not awaited: with Ollama down this waits out its timeout,
     # and the server must be answering /health long before then. Held in a
     # local so the task is not garbage-collected mid-flight.
     prewarm_task = asyncio.create_task(companion_service.prewarm())
+    # Same reasoning for TTS: warm the Kokoro session in the background so the
+    # first /speak after boot does not pay the load. Never raises.
+    tts_preload_task = asyncio.create_task(tts.preload())
 
     yield
 
     prewarm_task.cancel()
+    tts_preload_task.cancel()
     # Give the cancelled prewarm request a chance to release its HTTP resources
     # before the shared client is closed below.  Awaiting it also prevents a
     # pending-task warning during a fast server restart.
     with suppress(asyncio.CancelledError):
         await prewarm_task
+    with suppress(asyncio.CancelledError):
+        await tts_preload_task
     await proactive_service.stop()
     await reminder_service.stop()
+    await timers.timer_service.stop()
     await companion_service.aclose()
     store.close()
 
@@ -460,6 +475,57 @@ async def transcribe_endpoint(audio: UploadFile = File(...)):
     return TranscribeResponse(text=text)
 
 
+@app.get("/screenshot")
+async def screenshot_endpoint():
+    """A PNG of the PC's primary screen, for 'what's on my screen'."""
+    from app.services import pc_control
+
+    if not pc_control.IS_WINDOWS or not settings.pc_control_enabled:
+        raise HTTPException(status_code=404, detail="PC control is not available")
+    # Written to the system temp dir and removed once the response is sent.
+    shot = Path(tempfile.gettempdir()) / "companion_screenshot.png"
+    try:
+        await asyncio.to_thread(pc_control.capture_screenshot, str(shot))
+    except pc_control.PCControlError as e:
+        logger.warning("Screenshot failed: %s", e)
+        raise HTTPException(status_code=502, detail="Could not capture the screen") from e
+    if not shot.is_file():
+        raise HTTPException(status_code=502, detail="Could not capture the screen")
+    return FileResponse(shot, media_type="image/png", filename="screen.png")
+
+
+@app.post("/vision")
+async def vision_endpoint(image: UploadFile = File(...)):
+    """Describe a photo taken on the phone, via the local vision model.
+
+    The image is the whole context — no conversation, no tools — and the reply
+    is plain text the phone renders like any other companion line.
+    """
+    max_bytes = settings.max_audio_mb * 1024 * 1024
+    try:
+        data = await image.read(max_bytes + 1)
+    finally:
+        await image.close()
+
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413, detail=f"Image exceeds {settings.max_audio_mb} MB limit"
+        )
+
+    try:
+        text = await describe_image(base64.b64encode(data).decode())
+    except CompanionUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.error("Vision failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+    logger.info("Described %d bytes of image", len(data))
+    return {"text": text}
+
+
 @app.get("/events")
 async def events(request: Request):
     """Server-sent events: reminders push through here.
@@ -478,7 +544,8 @@ async def events(request: Request):
             # Guarded so a transient store error churns the reconnect instead
             # of killing the stream outright.
             try:
-                for fired in await asyncio.to_thread(reminder_service.check_reminders):
+                events, _power = await asyncio.to_thread(reminder_service.check_reminders)
+                for fired in events:
                     event_hub.publish(reminder_event(fired))
             except Exception as e:
                 logger.warning("Reminder check on connect failed: %s", e, exc_info=True)

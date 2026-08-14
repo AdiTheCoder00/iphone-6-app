@@ -44,11 +44,35 @@ class ReminderService:
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
 
-    def add(self, text: str, minutes_from_now: int) -> dict:
+    def add(
+        self,
+        text: str,
+        minutes_from_now: int,
+        repeat: str | None = None,
+        power_action: str | None = None,
+    ) -> dict:
         fire_at = datetime.now() + timedelta(minutes=minutes_from_now)
-        reminder = store.add_reminder(text, fire_at.timestamp())
-        logger.info("Reminder %d set for %s: %s", reminder["id"], fire_at, text)
+        reminder = store.add_reminder(text, fire_at.timestamp(), repeat=repeat, power_action=power_action)
+        logger.info(
+            "Reminder %d set for %s%s: %s",
+            reminder["id"],
+            fire_at,
+            f" (repeats {repeat})" if repeat else "",
+            text,
+        )
         return {**reminder, "fire_time_dt": fire_at}
+
+    def add_at(self, text: str, fire_time: float, repeat: str | None = None) -> dict:
+        """Absolute-time reminder, for 'at 7pm' and recurring clock times."""
+        reminder = store.add_reminder(text, fire_time, repeat=repeat)
+        logger.info(
+            "Reminder %d set for %s%s: %s",
+            reminder["id"],
+            datetime.fromtimestamp(fire_time),
+            f" (repeats {repeat})" if repeat else "",
+            text,
+        )
+        return {**reminder, "fire_time_dt": datetime.fromtimestamp(fire_time)}
 
     def pending(self) -> list[dict]:
         return store.pending_reminders()
@@ -83,10 +107,15 @@ class ReminderService:
                 matches.append(reminder)
         return matches
 
-    def check_reminders(self) -> list[dict]:
+    def check_reminders(self) -> tuple[list[dict], list[dict]]:
         """Internal, NOT model-facing. Claim (mark fired) everything now due
         and return the claimed rows; callers publish them to the SSE hub from
         the event loop.
+
+        Returns (events, power_actions). Power rows (scheduled shutdown/sleep/
+        lock) are claimed and returned even with nobody listening — a scheduled
+        shutdown must not wait for an SSE client — while plain reminders stay
+        pending until a listener exists, so nothing is lost.
 
         Publishing and claiming are deliberately split: check_reminders runs
         in a worker thread, and asyncio.Queue (the hub's internals) is not
@@ -98,10 +127,10 @@ class ReminderService:
         now = time.time()
         due = store.due_reminders(now)
         if not due:
-            return []
+            return [], []
 
         # Retire anything hopelessly stale regardless of who is listening.
-        fresh = []
+        fresh, power = [], []
         for reminder in due:
             if now - reminder["fire_time"] > MAX_LATE_SECONDS:
                 if store.mark_fired(reminder["id"]):
@@ -111,33 +140,74 @@ class ReminderService:
                         (now - reminder["fire_time"]) / 3600.0,
                         reminder["text"],
                     )
+            elif reminder.get("power_action"):
+                power.append(reminder)
             else:
                 fresh.append(reminder)
 
-        # No listener: leave them pending and try again next tick. (Reading
-        # subscriber_count from a worker thread races harmlessly — it only
-        # decides whether to claim now or later.)
+        # No listener: leave plain reminders pending and try again next tick.
+        # (Reading subscriber_count from a worker thread races harmlessly — it
+        # only decides whether to claim now or later.)
         if not fresh or event_hub.subscriber_count == 0:
             if fresh:
                 logger.info("%d reminder(s) due but nobody connected; holding", len(fresh))
-            return []
+            fresh = []
 
         fired = []
-        for reminder in fresh:
+        for reminder in fresh + power:
             # Claim before returning: if the claim loses a race, another
             # caller already sent this one and we must not send it twice.
             if store.mark_fired(reminder["id"]):
+                if reminder.get("repeat"):
+                    store.rearm_recurring(
+                        reminder["id"], reminder["repeat"], reminder["fire_time"]
+                    )
+                    logger.info(
+                        "Reminder %d fired and re-armed (%s): %s",
+                        reminder["id"],
+                        reminder["repeat"],
+                        reminder["text"],
+                    )
                 fired.append(reminder)
-        return fired
+
+        events = [r for r in fired if not r.get("power_action")]
+        power_actions = [r for r in fired if r.get("power_action")]
+        return events, power_actions
+
+    async def _run_power_action(self, row: dict) -> None:
+        """Execute a claimed power row: scheduled sleep/shutdown/lock."""
+        from app.config import settings
+        from app.services import pc_control
+
+        action = row.get("power_action")
+
+        def _act() -> None:
+            if action == "sleep":
+                pc_control.sleep_pc()
+            elif action == "shutdown":
+                pc_control.shutdown_pc(settings.pc_shutdown_delay_seconds)
+            elif action == "lock":
+                pc_control.lock_screen()
+            else:
+                raise ValueError(f"unknown power_action {action!r}")
+
+        try:
+            await asyncio.to_thread(_act)
+            logger.info("Scheduled power action %r executed: %s", action, row["text"])
+        except Exception as e:
+            logger.error("Scheduled power action %r failed: %s", action, e)
 
     async def _poll_loop(self) -> None:
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 # Claims happen in the thread; publishing stays on the loop.
-                for fired in await asyncio.to_thread(self.check_reminders):
+                events, power_actions = await asyncio.to_thread(self.check_reminders)
+                for fired in events:
                     event_hub.publish(reminder_event(fired))
                     logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
+                for row in power_actions:
+                    await self._run_power_action(row)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

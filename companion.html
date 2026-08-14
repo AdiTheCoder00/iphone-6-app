@@ -445,6 +445,17 @@ html, body {
 .bubble__action:disabled { opacity: 0.5; cursor: wait; }
 .bubble__action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Image bubbles (screenshot, Wi-Fi QR) — the image fills the bubble and the
+   dark text styling must not apply to it. */
+.bubble[data-image="true"] { padding: 10px; }
+.bubble__image {
+  display: block;
+  width: 100%;
+  max-width: 240px;
+  margin: 0 auto;
+  border-radius: 10px;
+}
+
 /* With the composer up the bubble would sit under the input, so it moves
    above it and gives back the height. Reminder bubbles keep their action
    row above the fold by staying taller than plain replies. */
@@ -467,13 +478,19 @@ html, body {
   bottom: calc(96px + var(--kb, 0px));
   z-index: 3;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 240ms cubic-bezier(0.4,0,0.2,1), transform 240ms cubic-bezier(0.4,0,0.2,1);
   pointer-events: none;
 }
 .composer[data-open="true"] { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+.composer__row {
+  display: flex;
+  align-items: center;
+}
 
 .composer__input {
   flex: 1 1 auto;
@@ -508,6 +525,24 @@ html, body {
   cursor: pointer;
 }
 .composer__send:disabled { opacity: 0.4; }
+
+.composer__tools {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+.composer__tool {
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  background: rgba(16, 22, 27, 0.85);
+  color: #a9bac2;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.composer__tool:active { opacity: 0.6; }
 
 .dock {
   position: relative;
@@ -723,6 +758,34 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
+.settings__title__text {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+/* The one way out that survives an open keyboard: the tap-outside strip is
+   hidden behind the on-screen keyboard while an input is focused. */
+.settings__close {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 7px 16px;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 14px;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: #9fe8f2;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  cursor: pointer;
+}
+.settings__close:active { background: rgba(39, 98, 111, 0.6); }
+.settings__close:focus-visible { outline: 2px solid #57d8e8; outline-offset: 2px; }
 /* Grab handle: the only affordance that this is a dismissable sheet. */
 .settings__title::before {
   content: '';
@@ -782,6 +845,22 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   cursor: pointer;
   border: none;
 }
+
+/* A solid settings action button (Show QR, Download conversation), distinct
+   from the row-style toggles above. */
+.field__btn {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  border-radius: 10px;
+  background: #0b141a;
+  color: var(--accent);
+  font-size: 14px;
+  cursor: pointer;
+}
+.field__btn:active { opacity: 0.7; }
+.field__btn + .field__input { margin-top: 8px; }
 
 .toggle {
   display: flex;
@@ -921,9 +1000,16 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   <div class="bubble" id="bubble" data-visible="false" role="region" aria-label="Companion message" aria-live="polite"></div>
 
   <form class="composer" id="composer" data-open="false" autocomplete="off">
-    <input class="composer__input" id="composerInput" type="text" placeholder="Say something…"
-           maxlength="2000" enterkeyhint="send" aria-label="Message" />
-    <button class="composer__send" id="composerSend" type="submit" aria-label="Send">↑</button>
+    <div class="composer__row">
+      <input class="composer__input" id="composerInput" type="text" placeholder="Say something…"
+             maxlength="2000" enterkeyhint="send" aria-label="Message" />
+      <button class="composer__send" id="composerSend" type="submit" aria-label="Send">↑</button>
+    </div>
+    <div class="composer__tools">
+      <button class="composer__tool" id="photoBtn" type="button">Photo</button>
+      <button class="composer__tool" id="screenBtn" type="button">Screen</button>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" hidden />
   </form>
 
   <div class="retry" id="retry" data-visible="false" role="status">
@@ -968,7 +1054,10 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   <!-- ------------------------------------------------------------ SETTINGS -->
   <div class="settings" id="settings" data-open="false" role="dialog" aria-label="Settings" aria-modal="true">
     <div class="settings__sheet" id="settingsSheet">
-      <h2 class="settings__title">Settings</h2>
+      <div class="settings__title">
+        <h2 class="settings__title__text">Settings</h2>
+        <button class="settings__close" id="settingsClose" type="button">Done</button>
+      </div>
 
       <div class="field">
         <label class="field__label" for="setBackend">Backend URL</label>
@@ -1034,8 +1123,21 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
         </button>
       </div>
 
+      <div class="field">
+        <div class="field__label">Wi-Fi QR <span class="field__value">for guests</span></div>
+        <input class="field__input" id="setQrSsid" type="text" autocapitalize="words"
+               autocorrect="off" spellcheck="false" placeholder="SSID" />
+        <input class="field__input" id="setQrPassword" type="text" autocapitalize="off"
+               autocorrect="off" spellcheck="false" placeholder="Password" />
+        <button class="field__btn" id="qrShowBtn" type="button">Show QR</button>
+      </div>
+
+      <div class="field">
+        <button class="field__btn" id="exportBtn" type="button">Download conversation</button>
+      </div>
+
       <p class="settings__hint">
-        Long-press anywhere to reopen · tap outside to close<br />
+        Long-press anywhere to reopen · tap outside or Done to close<br />
         For an always-on desk device also set<br />
         Settings › Display &amp; Brightness › Auto-Lock › Never
       </p>
@@ -1045,6 +1147,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   <div class="dim" id="dim" aria-hidden="true"></div>
 </div>
 
+<script src="qrcode.js"></script>
 <script>
 /* ===========================================================================
    CONFIG — persisted settings.
@@ -1588,6 +1691,27 @@ window.CompanionSpeech = (function () {
     cleanup();
   }
 
+  /* Distinctive two-tone ding for finished timers — the user hears it even
+     across the room, before the spoken line (or instead of it when speech is
+     off). Uses the same unlocked AudioContext so it plays without a gesture. */
+  function chime() {
+    if (!ctx) return;
+    var tones = [880, 660];
+    tones.forEach(function (freq, i) {
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + i * 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + i * 0.18 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.18 + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.18);
+      osc.stop(ctx.currentTime + i * 0.18 + 0.25);
+    });
+  }
+
   async function speak(text) {
     if (!window.CompanionConfig.get('voice')) return;
     /* Never speak into a dark room. */
@@ -1625,7 +1749,7 @@ window.CompanionSpeech = (function () {
     }
   }
 
-  return { speak: speak, cancel: cancel, unlock: unlock };
+  return { speak: speak, cancel: cancel, unlock: unlock, chime: chime };
 })();
 
 
@@ -1703,6 +1827,7 @@ window.CompanionChat = (function () {
     if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
     var myBubble = ++bubbleId;
     bubble.textContent = text;
+    bubble.removeAttribute('data-image');
     bubble.setAttribute('data-error', isError ? 'true' : 'false');
     bubble.setAttribute('data-actions', actions ? 'true' : 'false');
     if (actions) {
@@ -1732,6 +1857,32 @@ window.CompanionChat = (function () {
       bubble.setAttribute('data-visible', 'false');
       window.Companion.setEmotion('idle');
     }, hold);
+  }
+
+  /* An image bubble (screenshot, QR) — the bubble element is repurposed
+     with an <img> instead of text, same visibility lifecycle. */
+  function showImageBubble(imageUrl, holdMs) {
+    if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+    var myBubble = ++bubbleId;
+    bubble.textContent = '';
+    bubble.setAttribute('data-error', 'false');
+    bubble.setAttribute('data-actions', 'false');
+    bubble.setAttribute('data-image', 'true');
+    var img = document.createElement('img');
+    img.className = 'bubble__image';
+    img.alt = '';
+    img.src = imageUrl;
+    bubble.appendChild(img);
+    bubble.setAttribute('data-visible', 'true');
+    bubbleTimer = setTimeout(function () {
+      bubbleTimer = null;
+      if (myBubble !== bubbleId) return;
+      bubble.setAttribute('data-visible', 'false');
+      bubble.setAttribute('data-image', 'false');
+      bubble.textContent = '';
+      if (imageUrl.indexOf('blob:') === 0) URL.revokeObjectURL(imageUrl);
+      window.Companion.setEmotion('idle');
+    }, holdMs || 8000);
   }
 
   function showReminder(text, reminderId) {
@@ -1771,7 +1922,7 @@ window.CompanionChat = (function () {
     sendBtn.disabled = busy;
   }
 
-  async function send(text) {
+    async function send(text) {
     var mySend = ++sendId;
     conversation.push({ role: 'user', content: text });
 
@@ -1849,6 +2000,77 @@ window.CompanionChat = (function () {
     send(text);
   });
 
+  /* --- photo: describe with the local vision model ----------------------- */
+  var photoBtn = document.getElementById('photoBtn');
+  var screenBtn = document.getElementById('screenBtn');
+  var photoInput = document.getElementById('photoInput');
+
+  photoBtn.addEventListener('click', function () {
+    photoInput.click();
+  });
+
+  photoInput.addEventListener('change', function () {
+    var file = photoInput.files && photoInput.files[0];
+    photoInput.value = '';
+    if (!file || inFlight) return;
+    closeComposer();
+    sendPhoto(file);
+  });
+
+  async function sendPhoto(file) {
+    var mySend = ++sendId;
+    window.CompanionSpeech.cancel();
+    setBusy(true);
+    window.Companion.setEmotion('think');
+    var form = new FormData();
+    form.append('image', file, file.name || 'photo.jpg');
+    try {
+      var res = await window.CompanionConfig.request('/vision', {
+        method: 'POST',
+        body: form
+      }, CHAT_REQUEST_TIMEOUT_MS);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      if (mySend !== sendId) return;
+      conversation.push({ role: 'assistant', content: data.text });
+      window.Companion.setEmotion('happy');
+      showBubble(data.text, false);
+      window.CompanionSpeech.speak(data.text);
+    } catch (err) {
+      console.error('[Companion] vision failed:', err);
+      if (mySend !== sendId) return;
+      window.Companion.setEmotion('sad');
+      showBubble('could not look at that photo right now', true);
+    } finally {
+      if (mySend === sendId) setBusy(false);
+    }
+  }
+
+  /* --- screen: fetch the PC's screenshot and show it --------------------- */
+  screenBtn.addEventListener('click', function () {
+    if (inFlight) return;
+    closeComposer();
+    fetchScreenshot();
+  });
+
+  async function fetchScreenshot() {
+    setBusy(true);
+    window.Companion.setEmotion('think');
+    try {
+      var res = await window.CompanionConfig.request('/screenshot', {}, 30000);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var blob = await res.blob();
+      setBusy(false);
+      showImageBubble(URL.createObjectURL(blob));
+      window.Companion.setEmotion('happy');
+    } catch (err) {
+      console.error('[Companion] screenshot failed:', err);
+      setBusy(false);
+      window.Companion.setEmotion('sad');
+      showBubble('could not grab the screen right now', true);
+    }
+  }
+
   /* --- automations: server-pushed events ---------------------------------
      Reminders fire on the backend and arrive here over SSE. Rendering reuses
      the chat bubble so a pushed reminder and a spoken reply look identical. */
@@ -1899,10 +2121,11 @@ window.CompanionChat = (function () {
       var event;
       try { event = JSON.parse(e.data); } catch (err) { return; }
 
-      if (event.type === 'reminder' || event.type === 'proactive') {
-        /* A fired reminder and an unprompted line render identically — both
-           are the companion speaking without being asked. */
+      if (event.type === 'reminder' || event.type === 'timer' || event.type === 'proactive') {
+        /* A fired reminder, a finished timer and an unprompted line render
+           identically — all are the companion speaking without being asked. */
         window.Companion.setEmotion(event.emotion || 'happy');
+        if (event.type === 'timer') window.CompanionSpeech.chime();
         if (event.type === 'reminder' && typeof event.id === 'number') showReminder(event.text, event.id);
         else showBubble(event.text, false);
         window.CompanionSpeech.speak(event.text);
@@ -2020,6 +2243,9 @@ window.CompanionGlance = (function () {
   var QUIET_EMOTIONS = { idle: true, sleepy: true };
 
   var weather = '';
+  /* "next: Water plants in 12m" — refreshed on a minute timer, shown on the
+     same meta line as the weather so the idle readout stays one line. */
+  var nextReminder = '';
 
   function drawClock() {
     var now = new Date();
@@ -2031,7 +2257,40 @@ window.CompanionGlance = (function () {
     timeEl.textContent = h12 + ':' + (m < 10 ? '0' + m : m) + ' ' + suffix;
 
     var day = now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
-    metaEl.textContent = weather ? day + ' · ' + weather : day;
+    var parts = [day];
+    if (weather) parts.push(weather);
+    if (nextReminder) parts.push(nextReminder);
+    metaEl.textContent = parts.join(' · ');
+  }
+
+  function formatCountdown(seconds) {
+    if (seconds < 60) return 'in under a minute';
+    var mins = Math.round(seconds / 60);
+    if (mins < 60) return 'in ' + mins + 'm';
+    var hh = Math.floor(mins / 60), mm = mins % 60;
+    return mm ? 'in ' + hh + 'h ' + mm + 'm' : 'in ' + hh + 'h';
+  }
+
+  async function refreshNextReminder() {
+    /* Only worth fetching when the glance is actually showing. */
+    if (glance.getAttribute('data-visible') !== 'true') return;
+    try {
+      var res = await window.CompanionConfig.request('/reminders');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      var soonest = null;
+      data.reminders.forEach(function (r) {
+        if (r.power_action) return;           // scheduled power is not user news
+        if (soonest === null || r.fire_time < soonest.fire_time) soonest = r;
+      });
+      var delay = soonest ? Math.max(0, soonest.fire_time * 1000 - Date.now()) : null;
+      nextReminder = delay === null
+        ? ''
+        : 'next: ' + soonest.text.slice(0, 24) + ' ' + formatCountdown(delay / 1000);
+    } catch (e) {
+      nextReminder = '';                      // backend down: show less, not errors
+    }
+    drawClock();
   }
 
   function updateVisibility() {
@@ -2064,6 +2323,9 @@ window.CompanionGlance = (function () {
   setInterval(drawClock, CLOCK_TICK_MS);
   refreshWeather();
   setInterval(refreshWeather, WEATHER_REFRESH_MS);
+  /* A minute cadence keeps the countdown honest; the fetch itself only runs
+     while the glance is visible (see refreshNextReminder). */
+  setInterval(refreshNextReminder, 60 * 1000);
 
   /* Event-driven rather than polled: the face announces changes, and the
      bubble and composer are watched for attribute flips. */
@@ -2074,6 +2336,7 @@ window.CompanionGlance = (function () {
 
   window.CompanionConfig.onChange(function (key) {
     if (key === 'city' || key === 'backendUrl') refreshWeather();
+    if (key === 'backendUrl') refreshNextReminder();
   });
 
   return { refreshWeather: refreshWeather, redraw: drawClock, updateVisibility: updateVisibility };
@@ -2340,6 +2603,77 @@ window.CompanionGlance = (function () {
     }
   }
 
+  /* --- Wi-Fi QR -----------------------------------------------------------
+     Rendered into a bubble with the vendored qrcode-generator library
+     (qrcode.js, MIT). No backend involved: the code is made entirely here. */
+  var qrSsid = document.getElementById('setQrSsid');
+  var qrPassword = document.getElementById('setQrPassword');
+  var qrShowBtn = document.getElementById('qrShowBtn');
+
+  qrShowBtn.addEventListener('click', function () {
+    var ssid = qrSsid.value.trim();
+    if (!ssid) { qrSsid.focus(); return; }
+    /* The standard WIFI: URI format — scanners and iOS Camera read it. The
+       ; and \ characters need escaping per the spec. */
+    var payload = 'WIFI:T:WPA;S:' + ssid.replace(/([\\;])/g, '\\$1')
+      + ';P:' + qrPassword.value.replace(/([\\;])/g, '\\$1') + ';;';
+    var qr = qrcode(0, 'M');
+    qr.addData(payload, 'Byte');
+    qr.make();
+
+    if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+    var myBubble = ++bubbleId;
+    var canvas = document.createElement('canvas');
+    canvas.className = 'bubble__image';
+    var size = 240;
+    canvas.width = size; canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    var cells = qr.getModuleCount();
+    var scale = size / cells;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#0b141a';
+    for (var r = 0; r < cells; r++) {
+      for (var c = 0; c < cells; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect(Math.round(c * scale), Math.round(r * scale), Math.ceil(scale), Math.ceil(scale));
+      }
+    }
+    bubble.textContent = '';
+    bubble.setAttribute('data-error', 'false');
+    bubble.setAttribute('data-actions', 'false');
+    bubble.setAttribute('data-image', 'true');
+    bubble.appendChild(canvas);
+    bubble.setAttribute('data-visible', 'true');
+    bubbleTimer = setTimeout(function () {
+      bubbleTimer = null;
+      if (myBubble !== bubbleId) return;
+      bubble.setAttribute('data-visible', 'false');
+      bubble.setAttribute('data-image', 'false');
+      bubble.textContent = '';
+      window.Companion.setEmotion('idle');
+    }, 12000);
+  });
+
+  /* --- conversation export ------------------------------------------------- */
+  var exportBtn = document.getElementById('exportBtn');
+  exportBtn.addEventListener('click', async function () {
+    try {
+      var res = await window.CompanionConfig.request('/conversation');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'companion-conversation.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    } catch (e) {
+      window.CompanionChat.showBubble('could not download the conversation', true);
+    }
+  });
+
   /* --- settings open/close ------------------------------------------------ */
   function openSettings(focusBackend) {
     settings.setAttribute('data-open', 'true');
@@ -2358,8 +2692,13 @@ window.CompanionGlance = (function () {
   }
   function closeSettings() {
     settings.setAttribute('data-open', 'false');
-    backendInput.blur();
+    /* Blur whichever field is focused — without it the keyboard stays up
+       over the closed sheet. */
+    document.activeElement && document.activeElement.blur();
   }
+  /* The title bar's Done button is the reliable way out: it stays reachable
+     while the keyboard covers the tap-outside strip. */
+  document.getElementById('settingsClose').addEventListener('click', closeSettings);
 
   /* Tap outside the sheet dismisses. */
   settings.addEventListener('click', function (e) {

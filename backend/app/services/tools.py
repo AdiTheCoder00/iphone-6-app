@@ -12,6 +12,7 @@ in its own words rather than have the request 500.
 import asyncio
 import inspect
 import logging
+import re
 import ssl
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -161,46 +162,92 @@ _WMO = {
 }
 
 
-async def fetch_weather(city: str) -> dict:
-    """Raw current conditions. Callers format it for their own audience:
-    the tool spells it out for the model to read aloud, the idle screen needs
-    something a person can take in at a glance."""
+async def _geocode(city: str) -> dict:
+    """Resolve a city name to coordinates + label. Shared by the current-
+    conditions and daily-forecast fetchers so both agree on the place.
+
+    Common Indian names collide (there are two Gorakhpurs — Uttar Pradesh and
+    Haryana); Open-Meteo ranks by population within the response, so take the
+    biggest match for the name rather than blindly the first result.
+    """
     city = (city or "").strip()
     if not city:
         raise ValueError("needs a city name")
-
-    async with httpx.AsyncClient(timeout=WEATHER_TIMEOUT, verify=_SSL_CONTEXT) as client:
-        # Open-Meteo is keyless but coordinate-based, so geocode first.
+    async with httpx.AsyncClient(
+        timeout=WEATHER_TIMEOUT, verify=_SSL_CONTEXT, headers=_USER_AGENT
+    ) as client:
         geo = await client.get(
             "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": city, "count": 1, "language": "en", "format": "json"},
+            params={"name": city, "count": 5, "language": "en", "format": "json"},
         )
         geo.raise_for_status()
         results = (geo.json() or {}).get("results") or []
         if not results:
             raise LookupError(f"could not find a place called '{city}'")
-        place = results[0]
+        place = max(results, key=lambda r: r.get("population") or 0)
+    label = place.get("name", city)
+    if place.get("country"):
+        label = f"{label}, {place['country']}"
+    return {"label": label, "latitude": place["latitude"], "longitude": place["longitude"]}
 
+
+async def fetch_weather(city: str) -> dict:
+    """Raw current conditions. Callers format it for their own audience:
+    the tool spells it out for the model to read aloud, the idle screen needs
+    something a person can take in at a glance."""
+    where = await _geocode(city)
+
+    async with httpx.AsyncClient(
+        timeout=WEATHER_TIMEOUT, verify=_SSL_CONTEXT, headers=_USER_AGENT
+    ) as client:
         forecast = await client.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
-                "latitude": place["latitude"],
-                "longitude": place["longitude"],
+                "latitude": where["latitude"],
+                "longitude": where["longitude"],
                 "current": "temperature_2m,apparent_temperature,weather_code",
             },
         )
         forecast.raise_for_status()
         current = (forecast.json() or {}).get("current") or {}
 
-    label = place.get("name", city)
-    if place.get("country"):
-        label = f"{label}, {place['country']}"
-
     return {
-        "label": label,
+        "label": where["label"],
         "condition": _WMO.get(current.get("weather_code"), "unsettled"),
         "temp": current.get("temperature_2m"),
         "feels": current.get("apparent_temperature"),
+    }
+
+
+async def fetch_forecast(city: str) -> dict:
+    """Today's precipitation probability and conditions, for the rain alert.
+
+    Same geocoder as fetch_weather so the briefing and the alert agree on the
+    place; the alert only ever compares numbers, never free text.
+    """
+    where = await _geocode(city)
+
+    async with httpx.AsyncClient(
+        timeout=WEATHER_TIMEOUT, verify=_SSL_CONTEXT, headers=_USER_AGENT
+    ) as client:
+        forecast = await client.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": where["latitude"],
+                "longitude": where["longitude"],
+                "daily": "weather_code,precipitation_probability_max",
+                "timezone": "auto",
+            },
+        )
+        forecast.raise_for_status()
+        daily = (forecast.json() or {}).get("daily") or {}
+
+    codes = daily.get("weather_code") or [None]
+    probs = daily.get("precipitation_probability_max") or [None]
+    return {
+        "label": where["label"],
+        "today_precip_prob": probs[0],
+        "today_condition": _WMO.get(codes[0], "unsettled") if codes[0] is not None else None,
     }
 
 
@@ -248,7 +295,23 @@ register(
 # wrapper, so the tool layer stays free of scheduling concerns.
 
 
-def _set_reminder(text: str, minutes_from_now: int) -> str:
+def _next_occurrence(hour: int, minute: int) -> float:
+    """Unix timestamp of the next HH:MM, today if still ahead, else tomorrow."""
+    from datetime import timedelta
+
+    now = datetime.now()
+    when = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if when <= now:
+        when += timedelta(days=1)
+    return when.timestamp()
+
+
+def _set_reminder(
+    text: str,
+    minutes_from_now: int | None = None,
+    repeat: str | None = None,
+    at: str | None = None,
+) -> str:
     from app.services.reminders import reminder_service
 
     text = (text or "").strip()
@@ -259,6 +322,27 @@ def _set_reminder(text: str, minutes_from_now: int) -> str:
             f"ERROR: reminder text is too long ({len(text)} > {MAX_REMINDER_CHARS} chars); "
             "summarise it in one short sentence"
         )
+    if repeat and repeat not in ("daily", "weekly"):
+        return "ERROR: repeat must be 'daily' or 'weekly'"
+
+    if at:
+        # "at 7pm" style: an exact clock time, optionally repeating. The model
+        # hands over HH:MM in 24-hour form; see the tool description.
+        m = re.match(r"^(\d{1,2}):(\d{2})$", (at or "").strip())
+        if not m:
+            return "ERROR: at must be 'HH:MM' in 24-hour time, e.g. '19:00'"
+        hour, minute = int(m.group(1)), int(m.group(2))
+        if hour > 23 or minute > 59:
+            return "ERROR: at must be a valid time, e.g. '19:00'"
+        fire = _next_occurrence(hour, minute)
+        reminder = reminder_service.add_at(text, fire, repeat=repeat)
+        when = datetime.fromtimestamp(fire).strftime("%I:%M %p").lstrip("0")
+        suffix = f", repeating {repeat}" if repeat else ""
+        return f"Reminder set: '{text}' at {when}{suffix}."
+
+    if minutes_from_now is None:
+        return "ERROR: set_reminder needs either minutes_from_now or at"
+
     try:
         minutes = int(minutes_from_now)
     except (TypeError, ValueError):
@@ -266,20 +350,39 @@ def _set_reminder(text: str, minutes_from_now: int) -> str:
     if minutes < 0:
         return "ERROR: minutes_from_now cannot be negative"
 
-    reminder = reminder_service.add(text, minutes)
+    reminder = reminder_service.add(text, minutes, repeat=repeat)
     when = reminder["fire_time_dt"].strftime("%I:%M %p").lstrip("0")
-    return f"Reminder set: '{text}' in {minutes} minute(s), at {when}."
+    suffix = f", repeating {repeat}" if repeat else ""
+    return f"Reminder set: '{text}' in {minutes} minute(s), at {when}{suffix}."
 
 
 register(
     Tool(
         name="set_reminder",
-        description="Set a reminder that will alert the user later. Use when the user asks to be reminded of something.",
+        description=(
+            "Set a reminder that will alert the user later. Use when the user asks "
+            "to be reminded of something. For a one-shot relative reminder pass "
+            "minutes_from_now. For a clock time ('remind me at 7pm') pass at='HH:MM' "
+            "in 24-hour form and omit minutes_from_now. For something that repeats "
+            "('every morning at 7', 'water plants every Sunday') also pass "
+            "repeat='daily' or 'weekly'."
+        ),
         parameters={
             "text": {"type": "string", "description": "What to remind the user about"},
-            "minutes_from_now": {"type": "integer", "description": "Delay in minutes"},
+            "minutes_from_now": {
+                "type": "integer",
+                "description": "Delay in minutes (use with repeat='daily'/'weekly' for relative repeating reminders)",
+            },
+            "at": {
+                "type": "string",
+                "description": "Clock time in 24-hour HH:MM, e.g. '07:00' — instead of minutes_from_now",
+            },
+            "repeat": {
+                "type": "string",
+                "description": "Optional: 'daily' or 'weekly'",
+            },
         },
-        required=["text", "minutes_from_now"],
+        required=["text"],
         func=_set_reminder,
     )
 )
@@ -294,6 +397,9 @@ def _format_reminder(reminder: dict) -> str:
     stamp = when.strftime("%I:%M %p").lstrip("0")
     if when.date() != now.date():
         stamp = when.strftime("%a ") + stamp
+    repeat = reminder.get("repeat")
+    if repeat:
+        stamp += f" (repeats {repeat})"
     return f"[{reminder['id']}] {reminder['text']} at {stamp}"
 
 
@@ -433,6 +539,274 @@ register(
 )
 
 
+# --- timers -------------------------------------------------------------------
+# Countdown timers ("10 minute timer"), distinct from datetime reminders. The
+# service itself lives in services/timers.py; these are the model-facing
+# wrappers, like the reminder tools above.
+
+
+def _set_timer(minutes: int, label: str = "") -> str:
+    from app.services.timers import timer_service
+
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return "ERROR: minutes must be a whole number"
+    if minutes < 1 or minutes > 180:
+        return "ERROR: timers must be between 1 and 180 minutes"
+    label = (label or "").strip()
+    if len(label) > 60:
+        return "ERROR: timer label is too long; keep it short"
+    timer = timer_service.add(minutes, label)
+    return f"Timer set for {minutes} minute(s){': ' + label if label else ''}."
+
+
+register(
+    Tool(
+        name="set_timer",
+        description=(
+            "Set a countdown timer that alerts the user when the time is up. Use for "
+            "kitchen-timer style requests ('set a 10 minute timer', 'timer for 5 minutes')."
+        ),
+        parameters={
+            "minutes": {"type": "integer", "description": "Minutes to count down (1-180)"},
+            "label": {"type": "string", "description": "Optional short label, e.g. 'pasta'"},
+        },
+        required=["minutes"],
+        func=_set_timer,
+    )
+)
+
+
+def _cancel_timer(text: str) -> str:
+    from app.services.timers import timer_service
+
+    cancelled = timer_service.cancel_by_text(text)
+    if cancelled is None:
+        active = timer_service.active()
+        if not active:
+            return "ERROR: no timer is running"
+        listed = "\n".join(f"[{t['id']}] {t['text']}" for t in active)
+        return f"No timer matches. Running timers:\n{listed}"
+    return f"Cancelled: '{cancelled[1]}'."
+
+
+register(
+    Tool(
+        name="cancel_timer",
+        description="Cancel a running countdown timer. Use when the user asks to stop or cancel a timer.",
+        parameters={"text": {"type": "string", "description": "Roughly what the timer is for"}},
+        required=["text"],
+        func=_cancel_timer,
+    )
+)
+
+
+# --- briefing -----------------------------------------------------------------
+# A deterministic daily-ish digest: weather plus today's reminders. No LLM in
+# the assembly — the model merely reads the result aloud, and the proactive
+# morning push reuses it so the day starts with something useful.
+
+_NEWS_FEEDS = (
+    "https://www.hindustantimes.com/feeds/rss/top-news/rssfeed.xml",
+    "https://feeds.bbci.co.uk/news/world/rss.xml",
+)
+
+
+async def _fetch_headlines() -> list[str]:
+    """Top 3 headlines from the first feed that answers. Each feed is
+    fetched in its own client so one slow host cannot stall the briefing;
+    a broken feed is skipped, not fatal."""
+    import xml.etree.ElementTree as ET
+
+    titles: list[str] = []
+    for url in _NEWS_FEEDS:
+        try:
+            async with httpx.AsyncClient(
+                timeout=6.0, verify=_SSL_CONTEXT, headers=_USER_AGENT
+            ) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                root = ET.fromstring(r.content)
+                for item in root.iter("item"):
+                    title = (item.findtext("title") or "").strip()
+                    if title and title not in titles:
+                        titles.append(title)
+                    if len(titles) >= 3:
+                        break
+        except (httpx.HTTPError, ET.ParseError):
+            continue
+        if len(titles) >= 3:
+            break
+    return titles[:3]
+
+
+async def _get_briefing(city: str | None = None) -> str:
+    from app.config import settings
+    from app.services.reminders import reminder_service
+
+    city = (city or "").strip() or (settings.weather_city or "").strip()
+    lines: list[str] = []
+    if city:
+        try:
+            lines.append("Weather: " + format_weather_full(await fetch_weather(city)))
+        except (ValueError, LookupError, httpx.HTTPError) as e:
+            lines.append(f"Weather: unavailable right now ({e})")
+
+    today = datetime.now().date()
+    today_reminders = [
+        r
+        for r in reminder_service.pending()
+        if datetime.fromtimestamp(r["fire_time"]).date() == today
+    ]
+    if today_reminders:
+        lines.append(
+            "Reminders today: " + "; ".join(_format_reminder(r) for r in today_reminders)
+        )
+    else:
+        lines.append("No reminders set for today.")
+
+    headlines = await _fetch_headlines()
+    if headlines:
+        lines.append("News: " + " | ".join(headlines))
+
+    return " | ".join(lines)
+
+
+register(
+    Tool(
+        name="get_briefing",
+        description=(
+            "Get a short daily briefing: current weather and reminders scheduled for "
+            "today. Use when the user asks for a briefing, the plan for the day, or "
+            "what is coming up."
+        ),
+        parameters={"city": {"type": "string", "description": "Optional city for the weather"}},
+        required=[],
+        func=_get_briefing,
+    )
+)
+
+
+# --- web lookup ---------------------------------------------------------------
+# The local model knows what it was trained on and nothing newer. A cheap,
+# keyless lookup makes "what is X" answers real instead of guessed. The query
+# never interpolates into a URL — both endpoints are fixed and take it as a
+# query parameter.
+
+
+_USER_AGENT = {"User-Agent": "iphone-6-companion/1.0 (personal desk device)"}
+_LITE_HTML_SNIPPET = re.compile(r"<td class=['\"]result-snippet['\"]>(.*?)</td>", re.S)
+_HTML_TAGS = re.compile(r"<[^>]+>|&[a-z#0-9]+;")
+
+
+def _scrape_ddg_lite(html: str) -> str:
+    """First result snippet from DDG's lite HTML endpoint.
+
+    The last-resort fallback: it works even on networks where Wikipedia is
+    blocked, and its markup is stable enough to target one class attribute.
+    """
+    m = _LITE_HTML_SNIPPET.search(html)
+    if not m:
+        return ""
+    return _HTML_TAGS.sub("", m.group(1)).strip()
+
+
+async def _web_lookup(query: str) -> str:
+    query = (query or "").strip()
+    if not query:
+        return "ERROR: web_lookup needs a query"
+
+    async with httpx.AsyncClient(
+        timeout=6.0, verify=_SSL_CONTEXT, headers=_USER_AGENT
+    ) as client:
+        # DuckDuckGo Instant Answer: direct facts, no key. Not every query has
+        # one, but when it does the abstract is a full Wikipedia-style summary.
+        try:
+            r = await client.get(
+                "https://api.duckduckgo.com/",
+                params={
+                    "q": query,
+                    "format": "json",
+                    "no_html": 1,
+                    "skip_disambig": 1,
+                },
+            )
+            r.raise_for_status()
+            abstract = ((r.json() or {}).get("AbstractText") or "").strip()
+            if abstract:
+                return abstract[:600]
+        except httpx.HTTPError:
+            pass  # fall through
+
+        # Wikipedia search -> top hit's summary. Works on most networks;
+        # some ISPs block the Wikimedia range, which is what the third tier
+        # is for.
+        try:
+            r = await client.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": query,
+                    "srlimit": 1,
+                    "format": "json",
+                    "utf8": 1,
+                },
+            )
+            r.raise_for_status()
+            hits = ((r.json() or {}).get("query") or {}).get("search") or []
+            if hits:
+                summary_r = await client.get(
+                    "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                    + hits[0]["title"].replace(" ", "_")
+                )
+                summary_r.raise_for_status()
+                summary = ((summary_r.json() or {}).get("extract") or "").strip()
+                if summary:
+                    return summary[:600]
+        except httpx.HTTPError:
+            pass  # fall through
+
+        # DDG lite HTML: the snippet is short but real, and this host is not
+        # the Wikimedia range so it survives the block above. It serves an
+        # empty page to obviously-bot user agents, so use a browser one.
+        try:
+            lite_r = await client.get(
+                "https://lite.duckduckgo.com/lite/",
+                params={"q": query},
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0 Safari/537.36"
+                    )
+                },
+            )
+            lite_r.raise_for_status()
+            snippet = _scrape_ddg_lite(lite_r.text)
+            if snippet:
+                return snippet[:600]
+        except httpx.HTTPError:
+            pass
+
+        return f"ERROR: nothing found for '{query}'"
+
+
+register(
+    Tool(
+        name="web_lookup",
+        description=(
+            "Look up a fact on the web. Use whenever the user asks about something "
+            "you are unsure of — news, history, science, definitions, current events."
+        ),
+        parameters={"query": {"type": "string", "description": "What to look up, e.g. 'largest planet'"}},
+        required=["query"],
+        func=_web_lookup,
+    )
+)
+
+
 # --- local machine control ----------------------------------------------------
 # Registered only on Windows, and only when PC_CONTROL_ENABLED. A fixed set of
 # named actions; deliberately no arbitrary command execution.
@@ -537,6 +911,29 @@ def _register_pc_tools() -> None:
             return f"ERROR: {e}"
         return "PC locked."
 
+    async def _find_file(name: str) -> str:
+        try:
+            hits = await asyncio.to_thread(pc_control.find_files, name)
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        if not hits:
+            return f"No files named like '{name}' in Desktop, Documents or Downloads."
+        return "Found: " + " | ".join(hits[:5])
+
+    register(
+        Tool(
+            name="find_file",
+            description=(
+                "Search the user's Desktop, Documents and Downloads for files with "
+                "a matching name. Use when they ask to find a file — 'find my resume', "
+                "'where is that report'. Returns up to 5 full paths."
+            ),
+            parameters={"name": {"type": "string", "description": "Part of the file name, e.g. 'resume'"}},
+            required=["name"],
+            func=_find_file,
+        )
+    )
+
     register(
         Tool(
             name="lock_pc",
@@ -547,6 +944,43 @@ def _register_pc_tools() -> None:
             parameters={},
             required=[],
             func=_lock,
+        )
+    )
+
+    def _copy_to_clipboard(text: str) -> str:
+        try:
+            pc_control.set_clipboard(text)
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return "Copied to the clipboard."
+
+    register(
+        Tool(
+            name="copy_to_clipboard",
+            description=(
+                "Copy text to the PC's clipboard, so the user can paste it anywhere — "
+                "an address, a code snippet, a name. Use when they ask to copy something."
+            ),
+            parameters={"text": {"type": "string", "description": "The exact text to copy"}},
+            required=["text"],
+            func=_copy_to_clipboard,
+        )
+    )
+
+    def _read_clipboard() -> str:
+        try:
+            content = pc_control.get_clipboard()
+        except pc_control.PCControlError as e:
+            return f"ERROR: {e}"
+        return f"The clipboard contains: {content}" if content else "The clipboard is empty."
+
+    register(
+        Tool(
+            name="read_clipboard",
+            description="Read whatever text is currently on the PC's clipboard.",
+            parameters={},
+            required=[],
+            func=_read_clipboard,
         )
     )
 
@@ -735,6 +1169,50 @@ def _register_pc_tools() -> None:
                 parameters={},
                 required=[],
                 func=_cancel_power,
+            )
+        )
+
+    def _schedule_power(action: str, minutes_from_now: int) -> str:
+        from app.services.reminders import reminder_service
+
+        action = (action or "").strip().lower()
+        if action not in ("sleep", "shutdown", "lock"):
+            return "ERROR: action must be one of: sleep, shutdown, lock"
+        if settings.pc_power_control_enabled is False and action != "lock":
+            return "ERROR: power scheduling is disabled by config"
+        try:
+            minutes = int(minutes_from_now)
+        except (TypeError, ValueError):
+            return "ERROR: minutes_from_now must be a whole number of minutes"
+        if minutes < 1 or minutes > 4320:
+            return "ERROR: minutes_from_now must be between 1 and 4320 (3 days)"
+        # Reminder text and the cancel hint both use the bare action name, so
+        # the suggested phrase ("cancel the scheduled lock") matches the row
+        # through the same substring lookup as any other reminder.
+        reminder = reminder_service.add(
+            f"Scheduled {action}", minutes, power_action=action
+        )
+        when = reminder["fire_time_dt"].strftime("%I:%M %p").lstrip("0")
+        return (
+            f"Scheduled {action} for {minutes} minute(s) from now, at {when}. "
+            f"Say 'cancel the scheduled {action}' to abort it."
+        )
+
+    if settings.pc_power_control_enabled:
+        register(
+            Tool(
+                name="schedule_power_action",
+                description=(
+                    "Schedule a PC power action for later — 'shut down in 30 minutes', "
+                    "'sleep in an hour', 'lock in 5 minutes'. The action fires on its own "
+                    "at the scheduled time. To abort it, cancel the matching reminder."
+                ),
+                parameters={
+                    "action": {"type": "string", "description": "sleep, shutdown or lock"},
+                    "minutes_from_now": {"type": "integer", "description": "Minutes until it runs (1-4320)"},
+                },
+                required=["action", "minutes_from_now"],
+                func=_schedule_power,
             )
         )
 

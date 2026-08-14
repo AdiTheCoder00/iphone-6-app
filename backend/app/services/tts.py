@@ -110,6 +110,19 @@ async def get_kokoro():
     return _kokoro
 
 
+async def preload() -> None:
+    """Warm the Kokoro session at startup so the first /speak is instant.
+
+    Mirrors the LLM prewarm: without this, the first spoken reply after boot
+    pays the whole model + phonemizer load. Never raises — on failure the
+    lazy path in get_kokoro() loads on first use anyway.
+    """
+    try:
+        await get_kokoro()
+    except Exception:
+        logger.warning("TTS preload failed; will load on first use", exc_info=True)
+
+
 async def synthesize(text: str) -> bytes:
     """Render `text` to WAV bytes."""
     text = (text or "").strip()
@@ -123,9 +136,13 @@ async def synthesize(text: str) -> bytes:
     def _run() -> bytes:
         import soundfile as sf
 
-        audio, sample_rate = kokoro.create(
-            text, voice=settings.tts_voice, speed=settings.tts_speed, lang="en-us"
-        )
+        # LANGUAGE=hi pairs with a Hindi voice and lang tag (Kokoro ships
+        # hf_alpha/hm_omega for Hindi); English keeps the configured voice.
+        if settings.language == "hi":
+            voice, lang = "hf_alpha", "hi"
+        else:
+            voice, lang = settings.tts_voice, "en-us"
+        audio, sample_rate = kokoro.create(text, voice=voice, speed=settings.tts_speed, lang=lang)
         if len(audio) == 0:
             raise TTSError("TTS produced no audio")
         buf = io.BytesIO()

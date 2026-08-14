@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Local Ollama, same server guru-rag-app talks to.
     ollama_base_url: str = Field("http://localhost:11434", validation_alias="OLLAMA_BASE_URL")
     ollama_model: str = Field("qwen3:8b", validation_alias="OLLAMA_MODEL")
+    # Vision model for /vision (photo descriptions). Pull with:
+    #   ollama pull qwen2.5-vl:7b
+    # The endpoint answers with a clear 503 until the model exists.
+    ollama_vision_model: str = Field("qwen2.5-vl:7b", validation_alias="OLLAMA_VISION_MODEL")
 
     # Companion replies are one or two sentences on a 375px screen, so the
     # ceiling is deliberately far below guru-rag-app's 700: it bounds a
@@ -121,6 +125,27 @@ class Settings(BaseSettings):
     proactive_session_hours: float = Field(3.0, validation_alias="PROACTIVE_SESSION_HOURS")
     # Hours of user silence before a check-in. 0 disables.
     proactive_idle_hours: float = Field(4.0, validation_alias="PROACTIVE_IDLE_HOURS")
+    # City used by the morning briefing's weather line. The idle screen's
+    # weather stays per-device in the phone's settings; this one is only for
+    # server-side briefing, and empty means briefing skips weather.
+    weather_city: str = Field("", validation_alias="WEATHER_CITY")
+
+    # Reply language. "en" or "hi". Picks the system-prompt instruction to
+    # reply in that language, the Kokoro TTS voice/lang pair, and pairs with
+    # WHISPER_LANGUAGE for recognition. The phone-side speech picker is a
+    # separate per-device setting in the PWA.
+    language: str = Field("en", validation_alias="LANGUAGE")
+
+    # Rain alert: when today's forecast precipitation probability reaches this
+    # percent, the companion mentions it once in the morning. 0 disables.
+    rain_alert_threshold: int = Field(60, ge=0, le=100, validation_alias="RAIN_ALERT_THRESHOLD")
+    # Battery-low push: at or below this percent the companion nudges about
+    # charging. Desktops have no battery and this stays dormant. 0 disables.
+    battery_alert_threshold: int = Field(20, ge=0, le=100, validation_alias="BATTERY_ALERT_THRESHOLD")
+    # Minimum hours between battery nudges.
+    battery_alert_interval_hours: float = Field(
+        4.0, ge=0.5, validation_alias="BATTERY_ALERT_INTERVAL_HOURS"
+    )
 
     # Local machine control (media keys, volume, lock screen). Windows only;
     # the tools do not register on other platforms regardless of this flag.

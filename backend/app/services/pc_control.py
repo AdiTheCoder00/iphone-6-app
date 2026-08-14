@@ -173,12 +173,144 @@ def system_stats() -> dict:
 # the user already approved in .env.
 
 
+def _grant_foreground() -> None:
+    """Allow the process we are about to start to take the foreground.
+
+    Windows refuses to hand a new window the focus when the launching process
+    is in the background (foreground lock) — the browser then opens but just
+    flashes its taskbar button. Granting the right beforehand is the
+    documented fix. Best effort: the window still opens if it fails.
+    """
+    _require_windows()
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+    except OSError:
+        pass
+
+
+# Window titles of common Chromium/Firefox builds, matched against when the
+# URL fragments above do not cover whatever browser the user actually has.
+_BROWSER_WINDOW_FRAGMENTS = ("chrome", "msedge", "edge", "firefox", "brave", "opera", "vivaldi")
+
+
+def _foreground_in_background(fragments: list[str]) -> None:
+    """Raise a window matching one of the fragments, without blocking the caller.
+
+    Polling for the window can take a couple of seconds (a cold browser start),
+    which must not stall the chat turn the tool call is part of — so the
+    activation happens on a daemon thread.
+    """
+    if not IS_WINDOWS:
+        return
+    import threading
+
+    threading.Thread(
+        target=_bring_window_to_front, args=(fragments,), daemon=True
+    ).start()
+
+
+def _bring_window_to_front(fragments: list[str], timeout_seconds: float = 8.0) -> None:
+    """Force a visible window whose title contains any fragment to the foreground.
+
+    AllowSetForegroundWindow helps a freshly started process, but a browser
+    that opens a tab in an ALREADY RUNNING window still ends up unfocused —
+    the user sees the tab appear and the taskbar button flash. This is the
+    standard workaround: attaching to the target window's input queue bypasses
+    the foreground lock, after which SetForegroundWindow is honoured even from
+    a background process. A simulated Alt press covers the remaining case.
+
+    Best effort: if no matching window appears within the timeout, nothing
+    happens and the caller's world is unchanged.
+    """
+    import ctypes
+    import time
+    from ctypes import wintypes
+
+    fragments_lower = [f.lower() for f in fragments if f]
+    if not fragments_lower:
+        return
+
+    enum_windows = ctypes.windll.user32.EnumWindows
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    get_window_text_length = ctypes.windll.user32.GetWindowTextLengthW
+    get_window_text = ctypes.windll.user32.GetWindowTextW
+    is_window_visible = ctypes.windll.user32.IsWindowVisible
+    get_thread_process_id = ctypes.windll.user32.GetWindowThreadProcessId
+    get_current_thread_id = ctypes.windll.kernel32.GetCurrentThreadId
+    show_window = ctypes.windll.user32.ShowWindow
+    set_foreground_window = ctypes.windll.user32.SetForegroundWindow
+    bring_window_to_top = ctypes.windll.user32.BringWindowToTop
+    attach_thread_input = ctypes.windll.user32.AttachThreadInput
+    keybd_event = ctypes.windll.user32.keybd_event
+    set_focus = ctypes.windll.user32.SetFocus
+
+    SW_RESTORE = 9
+    VK_MENU = 0x12
+    KEYEVENTF_KEYUP = 0x0002
+
+    def activate(hwnd) -> None:
+        show_window(hwnd, SW_RESTORE)
+        # A simulated Alt press resets the foreground lock so the
+        # SetForegroundWindow below is honoured from this background process.
+        # Harmless when not needed.
+        keybd_event(VK_MENU, 0, 0, 0)
+        keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+        target_thread = get_thread_process_id(hwnd, None)
+        own_thread = get_current_thread_id()
+        attached = bool(
+            target_thread
+            and target_thread != own_thread
+            and attach_thread_input(own_thread, target_thread, True)
+        )
+        set_foreground_window(hwnd)
+        bring_window_to_top(hwnd)
+        if attached:
+            attach_thread_input(own_thread, target_thread, False)
+        set_focus(hwnd)
+
+    def find_and_activate() -> bool:
+        found: list[int] = []
+
+        def collect(hwnd, _lparam):
+            if not is_window_visible(hwnd):
+                return True
+            length = get_window_text_length(hwnd)
+            if length == 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            get_window_text(hwnd, buf, length + 1)
+            title = buf.value.lower()
+            if any(frag in title for frag in fragments_lower):
+                found.append(hwnd)
+                return False  # stop enumerating
+            return True
+
+        enum_windows(enum_proc(collect), 0)
+        if found:
+            activate(found[0])
+            return True
+        return False
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if find_and_activate():
+            return
+        time.sleep(0.2)
+
+
 def launch_app(path: str) -> None:
     _require_windows()
+    _grant_foreground()
     try:
         os_startfile(path)
     except OSError as e:
         raise PCControlError(f"could not launch it ({e})") from e
+    # Raise the app's window over whatever has focus, once it appears. The
+    # basename is the best title fragment we have ("notepad.exe" -> a title
+    # like "Untitled - Notepad").
+    import os
+
+    _foreground_in_background([os.path.splitext(os.path.basename(path))[0]])
 
 
 # --- open a browser tab -------------------------------------------------------
@@ -247,8 +379,22 @@ def open_url(url: str) -> str:
             raise PCControlError(f"'{url}' is not a web address")
         final = "https://" + url
 
+    _grant_foreground()
     if not webbrowser.open(final):
         raise PCControlError("no browser was available to open it")
+    # Bring the browser window over whatever has focus, once it appears. Match
+    # on the registrable domain first ("youtube.com" -> a title like
+    # "YouTube - Google Chrome"), then the full host, then any known browser.
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    fragments: list[str] = []
+    labels = host.split(".")
+    if len(labels) >= 2:
+        fragments.append(labels[-2])
+    fragments.append(host)
+    fragments.extend(_BROWSER_WINDOW_FRAGMENTS)
+    _foreground_in_background(fragments)
     return final
 
 
@@ -258,6 +404,184 @@ def os_startfile(path: str) -> None:
     import os
 
     os.startfile(path)  # noqa: S606 - path comes only from a config whitelist
+
+
+# --- file search & screenshots ------------------------------------------------
+# Both go through Windows PowerShell because .NET's filesystem and drawing
+# stacks are already on every Windows box — no new pip dependency, and no
+# arbitrary command execution: the query text is escaped into a single-quoted
+# PowerShell literal and the rest of the script is fixed.
+
+_FILE_SEARCH_ROOTS = (
+    r"$env:USERPROFILE\Desktop",
+    r"$env:USERPROFILE\Documents",
+    r"$env:USERPROFILE\Downloads",
+)
+_SEARCH_MAX_RESULTS = 5
+_POWERSHELL_TIMEOUT = 20.0
+
+
+def _ps_literal(value: str) -> str:
+    """Escape a value for a single-quoted PowerShell literal."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _run_powershell(script: str) -> str:
+    """Run a fixed PowerShell script, returning stdout. Never raises."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_POWERSHELL_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise PCControlError(f"powershell failed ({e})") from e
+    return result.stdout
+
+
+def find_files(name: str) -> list[str]:
+    """Search Desktop/Documents/Downloads for files whose name contains `name`.
+
+    Read-only, bounded to the user's own folders, and capped at five hits —
+    a short list the model can read back, not an index of the disk.
+    """
+    _require_windows()
+    name = (name or "").strip()
+    if not name:
+        raise PCControlError("find_files needs a name")
+    # -like treats [ as a wildcard class; escape it so a literal bracket in
+    # the query matches itself. * and ? in the query stay wildcards, which is
+    # what someone searching for "report 202*" wants.
+    pattern = name.replace("[", "`[").replace("]", "`]")
+    script = (
+        "$hits = @();"
+        "Get-ChildItem -Path "
+        + ",".join(_FILE_SEARCH_ROOTS)
+        + " -Recurse -File -Force -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ $_.Name -like '*{pattern}*' }} | "
+        f"Select-Object -First {_SEARCH_MAX_RESULTS} | "
+        "ForEach-Object { $hits += $_.FullName };"
+        "$hits -join \"`n\""
+    )
+    out = _run_powershell(script)
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def capture_screenshot(path: str) -> None:
+    """Capture the primary screen to a PNG at `path`. Never raises."""
+    _require_windows()
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "Add-Type -AssemblyName System.Drawing;"
+        "$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;"
+        "$bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height);"
+        "$g = [System.Drawing.Graphics]::FromImage($bmp);"
+        "$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size);"
+        f"$bmp.Save({_ps_literal(path)}, [System.Drawing.Imaging.ImageFormat]::Png);"
+        "$g.Dispose(); $bmp.Dispose()"
+    )
+    _run_powershell(script)
+
+
+# --- clipboard ----------------------------------------------------------------
+# CF_UNICODETEXT via user32/kernel32, no PowerShell and no encoding pitfalls.
+# Clipboard memory is owned by the system once SetClipboardData succeeds, so
+# the handles below must be NULLed (or never freed) on that path only.
+
+
+def set_clipboard(text: str) -> None:
+    """Copy text to the Windows clipboard, replacing whatever was there."""
+    _require_windows()
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+
+    data = (text or "").encode("utf-16-le") + b"\x00\x00"
+    if not user32.OpenClipboard(None):
+        raise PCControlError("could not open the clipboard")
+    try:
+        if not user32.EmptyClipboard():
+            raise PCControlError("could not clear the clipboard")
+        # GMEM_MOVEABLE | GMEM_ZEROINIT — the shape SetClipboardData expects.
+        handle = kernel32.GlobalAlloc(0x0042, len(data))
+        if not handle:
+            raise PCControlError("could not allocate clipboard memory")
+        transferred = False
+        try:
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                raise PCControlError("could not lock clipboard memory")
+            try:
+                ctypes.memmove(ptr, data, len(data))
+            finally:
+                kernel32.GlobalUnlock(handle)
+            if not user32.SetClipboardData(13, handle):  # CF_UNICODETEXT
+                raise PCControlError("could not set clipboard data")
+            transferred = True  # ownership now belongs to the system
+        finally:
+            if not transferred:
+                kernel32.GlobalFree(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def get_clipboard() -> str:
+    """Read the current clipboard text, or '' when it holds no text."""
+    _require_windows()
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
+    if not user32.OpenClipboard(None):
+        raise PCControlError("could not open the clipboard")
+    try:
+        handle = user32.GetClipboardData(13)  # CF_UNICODETEXT
+        if not handle:
+            return ""
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return ""
+        try:
+            return ctypes.wstring_at(ptr).rstrip("\x00")
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
 
 
 # --- power --------------------------------------------------------------------

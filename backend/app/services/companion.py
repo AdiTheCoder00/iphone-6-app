@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 
 import httpx
 
@@ -20,6 +21,139 @@ HISTORY_TURNS = 12
 # Two covers the realistic chains (look something up, then act on it) while
 # making an infinite tool loop structurally impossible.
 MAX_TOOL_CALLS = 2
+
+# Command-like messages. A small local model imitates the previous assistant
+# reply when the same-shaped request appears in history — "Open YouTube" after
+# an old "YouTube is open!" produces a fresh "YouTube is open!" with no tool
+# call behind it. For these, chat() skips the history pass entirely and
+# answers from a clean context, where the model fires tools reliably.
+_COMMAND_RE = re.compile(
+    r"\b(open|launch|start|play|pause|resume|next|previous|skip|volume|mute|unmute|"
+    r"lock|sleep|shut\s?down|shutdown|restart|power|remind|remember|forget|cancel|"
+    r"timer|brief|clipboard|copy|what time|what's the time|what time is it|what day|"
+    r"date|weather|temperature|battery|stats|now playing|media)\b",
+    re.IGNORECASE,
+)
+
+# Tools whose result is already a speak-ready sentence ("Volume set to 50%.",
+# "PC locked."). When a round fires only these and none errored, the model's
+# phrasing round would merely repeat the same sentence a beat later — the
+# result is returned directly instead.
+_MECHANICAL_TOOLS = frozenset(
+    {
+        "open_in_browser",
+        "launch_app",
+        "control_media",
+        "set_volume",
+        "set_mute",
+        "lock_pc",
+        "set_timer",
+        "cancel_timer",
+        "copy_to_clipboard",
+    }
+)
+
+# Deterministic command fast path, tried BEFORE the LLM is asked at all:
+# "open youtube" should open a tab in a couple of seconds, not after a full
+# model round. Patterns are deliberately tight — anything that does not match
+# cleanly falls through to the normal tool-calling loop unchanged.
+_FAST_OPEN_RE = re.compile(
+    r"^(?:(?:can|could)\s+you\s+|please\s+)?"
+    r"(?:open|launch|start|go to)\s+"
+    r"(.+?)(?:\s+for me)?\s*(?:please)?[.!?]*$",
+    re.IGNORECASE,
+)
+_FAST_VOLUME_RE = re.compile(
+    r"^(?:please\s+)?(?:set\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?[.!?]*$",
+    re.IGNORECASE,
+)
+_FAST_MEDIA_RE = re.compile(
+    r"^(?:please\s+)?(play|pause|resume|next|previous|skip|stop)[.!?]*$",
+    re.IGNORECASE,
+)
+_FAST_LOCK_RE = re.compile(
+    r"^(?:please\s+)?lock(?:\s+(?:the|my)\s+(?:pc|computer|screen))?[.!?]*$",
+    re.IGNORECASE,
+)
+_FAST_TIMER_RE = re.compile(
+    r"^(?:please\s+)?(?:set\s+(?:a|an)\s+)?(\d{1,3})\s*(?:min(?:ute)?s?)\s*"
+    r"timer(?:\s+for\s+(.+?))?\s*(?:please)?[.!?]*$",
+    re.IGNORECASE,
+)
+_FAST_TIMER_BARE_RE = re.compile(
+    r"^(?:please\s+)?(?:set\s+)?(?:a\s+)?timer\s+(?:for\s+)?"
+    r"(\d{1,3})\s*(?:min(?:ute)?s?)\s*(?:please)?[.!?]*$",
+    re.IGNORECASE,
+)
+_FAST_MEDIA_ACTION = {
+    "play": "play_pause",
+    "pause": "play_pause",
+    "resume": "play_pause",
+    "next": "next",
+    "skip": "next",
+    "previous": "previous",
+    "stop": "stop",
+}
+
+
+async def _fast_command(message: str) -> str | None:
+    """Resolve a common command without the LLM. Returns a speak-ready result
+    string, or None when the message is not a clean match — the caller then
+    runs the normal tool-calling loop."""
+    text = (message or "").strip().lower()
+    if not text:
+        return None
+
+    def handled(result: str) -> str | None:
+        return None if result.startswith("ERROR") else result
+
+    if text in (
+        "mute", "mute audio", "mute sound",
+        "unmute", "unmute audio", "unmute sound",
+    ):
+        muted = text.startswith("mute") and not text.startswith("unmute")
+        return handled(await tools.execute("set_mute", {"muted": muted}))
+
+    m = _FAST_VOLUME_RE.match(text)
+    if m:
+        percent = int(m.group(1))
+        if percent <= 100:
+            return handled(await tools.execute("set_volume", {"percent": percent}))
+        return None
+
+    m = _FAST_MEDIA_RE.match(text)
+    if m:
+        return handled(
+            await tools.execute(
+                "control_media", {"action": _FAST_MEDIA_ACTION[m.group(1)]}
+            )
+        )
+
+    m = _FAST_OPEN_RE.match(text)
+    if m:
+        # "open my email" -> shortcut "email"; "open youtube on the pc" ->
+        # the site part only. The registered open_in_browser tool then applies
+        # the same shortcut and URL validation as the LLM path.
+        target = re.sub(r"^my\s+", "", m.group(1).strip())
+        target = re.sub(r"\s+on (?:the )?(?:pc|computer|my (?:pc|computer))$", "", target)
+        return handled(await tools.execute("open_in_browser", {"target": target}))
+
+    if _FAST_LOCK_RE.match(text):
+        return handled(await tools.execute("lock_pc", {}))
+
+    m = _FAST_TIMER_RE.match(text)
+    if m is None:
+        m = _FAST_TIMER_BARE_RE.match(text)
+    if m:
+        minutes = int(m.group(1))
+        if 1 <= minutes <= 180:
+            label = m.group(2) if m.lastindex and m.lastindex >= 2 else ""
+            return handled(
+                await tools.execute("set_timer", {"minutes": minutes, "label": label or ""})
+            )
+        return None
+
+    return None
 
 # The prompt asks for about 200 characters, but a slightly larger hard ceiling
 # leaves room for a natural two-sentence reply while still bounding text from a
@@ -65,7 +199,12 @@ right away — it works during the warning delay before the PC actually turns of
 
 Otherwise — small talk, feelings, opinions, or once you already have a tool result to
 report — just reply normally in plain text. Never mention tools, arguments, JSON or errors
-by name; if a tool result starts with "ERROR", say plainly that it didn't work."""
+by name; if a tool result starts with "ERROR", say plainly that it didn't work.
+
+The conversation above is history, not a template. A similar request in the past does not
+mean it was already done — every new request must call its tool again. Never reply like
+"X is open!" or "done that" unless a tool was actually called for it this turn; if no tool
+fired, the thing was not done, so say what you can do instead or ask what you need."""
 
 # Durable facts, injected ahead of the tool block. Framed as things already
 # known rather than as a transcript, so the model does not treat them as
@@ -77,6 +216,15 @@ Things you already know about this person, from earlier conversations:
 
 Use these naturally when they matter. Do not recite them, do not mention that
 you have notes, and do not bring them up unprompted just to show you remember."""
+
+# Language instruction, appended to the persona when LANGUAGE=hi. English
+# needs no instruction; Hindi does, or the model stays in English by default.
+LANGUAGE_INSTRUCTIONS = {
+    "hi": (
+        "\n\nThe user speaks Hindi. Reply in Hindi, in Devanagari script — "
+        "warm and natural, the same short plain style as your English replies."
+    ),
+}
 
 # Injected once the tool budget is spent, so the last call cannot start another
 # chain no matter what the model would prefer to do. No output-shape
@@ -269,9 +417,18 @@ class CompanionService:
     @staticmethod
     def _persona(facts: list[str] | None) -> str:
         prompt = SYSTEM_PROMPT
-        if facts:
+        extras = list(facts or [])
+        if settings.weather_city:
+            extras.append(
+                f"The user's city is {settings.weather_city} — use it for weather and "
+                "forecasts unless they name another place."
+            )
+        language_note = LANGUAGE_INSTRUCTIONS.get(settings.language)
+        if language_note:
+            prompt += language_note
+        if extras:
             prompt += MEMORY_PROMPT_TEMPLATE.format(
-                facts="\n".join("- " + fact for fact in facts)
+                facts="\n".join("- " + fact for fact in extras)
             )
         return prompt
 
@@ -400,10 +557,56 @@ class CompanionService:
         discourages further calls; if the model still emits one, the loop
         terminates from the text anyway rather than executing past the budget.
 
+        One quirk is handled here: a small local model tends to imitate the
+        previous assistant reply when the same-shaped request appears in the
+        history — "Open YouTube" after an old "YouTube is open!" produces a
+        fresh "YouTube is open!" with no tool call behind it, and the poison
+        survives prompt instructions. Measured after hardening, a first pass
+        over the history still missed command turns 100% of the time, then
+        fired the tool reliably from an empty history. So command-like
+        messages skip the history pass entirely and are answered from a clean
+        context: faster (one full round trip instead of two) and reliable.
+        Everything else keeps the history it needs.
+
+        Common commands additionally short-circuit before the model at all:
+        _fast_command resolves "open X", mute, volume, media and lock
+        deterministically, so the browser is on screen in a couple of seconds
+        rather than after a full generation. Anything unparsed falls through
+        to the tool-calling loop unchanged.
+
         Raises CompanionUnavailable when Ollama is unreachable or errors, so
         the route can answer with the frontend's "sad" fallback path.
         """
+        started = time.monotonic()
+        fast = await _fast_command(message)
+        if fast is not None:
+            logger.info(
+                "Fast path handled '%s' in %.2fs", message, time.monotonic() - started
+            )
+            emotion = await self._classify_emotion(fast)
+            return {"reply": fast, "emotion": emotion}
+
         facts = await asyncio.to_thread(self._load_facts)
+        history_for_pass = [] if _COMMAND_RE.search(message) else history
+        result = await self._run_tool_loop(message, history_for_pass, facts)
+        emotion = await self._classify_emotion(result["reply"])
+        logger.info(
+            "Chat turn '%s' took %.2fs (%d tool call(s))",
+            message,
+            time.monotonic() - started,
+            result["tool_calls_used"],
+        )
+        return {"reply": result["reply"], "emotion": emotion}
+
+    async def _run_tool_loop(
+        self, message: str, history: list[ChatMessage], facts: list[str] | None
+    ) -> dict:
+        """One full tool-calling loop for a message.
+
+        Returns {"reply", "tool_calls_used"} — emotion is classified once by
+        chat() on the final reply, since this loop can run twice and a
+        discarded intermediate reply does not deserve its own call.
+        """
         messages: list[dict] = [
             {"role": "system", "content": self._tool_system_prompt(facts)},
             *self._history_messages(history),
@@ -437,10 +640,9 @@ class CompanionService:
                 if not reply:
                     logger.error("Model produced an empty reply")
                     raise CompanionUnavailable("Model produced an empty reply")
-                emotion = await self._classify_emotion(reply)
                 if tool_calls_used:
                     logger.info("Replied after %d tool call(s)", tool_calls_used)
-                return {"reply": reply, "emotion": emotion}
+                return {"reply": reply, "tool_calls_used": tool_calls_used}
 
             messages.append(
                 {
@@ -449,6 +651,7 @@ class CompanionService:
                     "tool_calls": calls,
                 }
             )
+            round_tools: list[tuple[str, str]] = []
             for call in calls:
                 fn = call.get("function") or {}
                 name = fn.get("name")
@@ -474,6 +677,20 @@ class CompanionService:
                 )
                 logger.debug("Tool %s args=%r result=%r", name, args, result)
                 messages.append({"role": "tool", "content": result, "name": name})
+                round_tools.append((name, result))
+
+            # Mechanical actions return speak-ready sentences already; the
+            # model's phrasing round would just repeat them a beat later. Skip
+            # it when every tool this round was mechanical and none errored —
+            # an ERROR result still needs the model to phrase it honestly.
+            if round_tools and all(
+                name in _MECHANICAL_TOOLS for name, _ in round_tools
+            ) and not any(result.startswith("ERROR") for _, result in round_tools):
+                reply = _normalize_reply(round_tools[-1][1])
+                logger.info(
+                    "Replied from %d mechanical tool result(s)", tool_calls_used
+                )
+                return {"reply": reply, "tool_calls_used": tool_calls_used}
 
     async def prewarm(self) -> None:
         """Make the model weights resident before the user says anything.
@@ -539,6 +756,59 @@ class CompanionService:
         except httpx.HTTPError:
             self._model_status = "unavailable"
             return False
+
+
+async def describe_image(image_base64: str) -> str:
+    """Ask the vision model what is in a photo, in plain language.
+
+    Deliberately NOT a tool: the image arrives from the phone, not from the
+    model's reasoning, so it rides a dedicated endpoint instead. One round,
+    no tools, no conversation history — the picture is the whole context.
+
+    Raises CompanionUnavailable when Ollama is down, and when the vision model
+    is not pulled (404 from Ollama) so the endpoint can explain that clearly.
+    """
+    model = settings.ollama_vision_model
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Describe what is in this photo in one or two short, plain "
+                    "sentences. Say what it is before anything else."
+                ),
+                "images": [image_base64],
+            }
+        ],
+        "stream": False,
+        "options": {"temperature": 0.2, "num_predict": 150},
+        "keep_alive": settings.ollama_keep_alive,
+    }
+    try:
+        response = await companion_service._get_client().post(
+            "/api/chat",
+            json=payload,
+            timeout=settings.llm_request_timeout,
+        )
+    except httpx.HTTPError as e:
+        companion_service._model_status = "unavailable"
+        logger.error("Ollama unreachable for vision: %s", e)
+        raise CompanionUnavailable("Ollama is unreachable") from e
+
+    if response.status_code == 404:
+        raise CompanionUnavailable(
+            f"Vision model '{model}' is not pulled yet — run 'ollama pull {model}'"
+        )
+    if response.status_code != 200:
+        raise CompanionUnavailable(
+            f"Ollama returned {response.status_code} for the vision request"
+        )
+    message = (response.json() or {}).get("message") or {}
+    text = (message.get("content") or "").strip()
+    if not text:
+        raise CompanionUnavailable("Vision model returned an empty description")
+    return one_line(text)
 
 
 companion_service = CompanionService()

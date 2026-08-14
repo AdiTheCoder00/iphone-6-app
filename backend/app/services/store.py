@@ -68,8 +68,28 @@ class Store:
             # otherwise raise "database is locked" instead of waiting.
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(SCHEMA)
+            self._migrate_reminders()
             self._conn.commit()
         logger.info("Store ready at %s", path)
+
+    def _migrate_reminders(self) -> None:
+        """Add columns to the reminders table created by older versions.
+
+        CREATE TABLE IF NOT EXISTS never touches an existing table, so new
+        columns need an explicit, idempotent ALTER. Idempotent is the point:
+        this runs on every startup and must be a no-op once applied.
+        """
+        conn = self._require()
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(reminders)").fetchall()
+        }
+        for column, ddl in (
+            ("repeat", "ALTER TABLE reminders ADD COLUMN repeat TEXT"),
+            ("power_action", "ALTER TABLE reminders ADD COLUMN power_action TEXT"),
+        ):
+            if column not in existing:
+                conn.execute(ddl)
 
     def close(self) -> None:
         if self._conn is not None:
@@ -84,24 +104,38 @@ class Store:
 
     # --- reminders ------------------------------------------------------
 
-    def add_reminder(self, text: str, fire_time: float) -> dict:
+    def add_reminder(
+        self,
+        text: str,
+        fire_time: float,
+        repeat: str | None = None,
+        power_action: str | None = None,
+    ) -> dict:
         conn = self._require()
         now = time.time()
         with self._lock:
             cur = conn.execute(
-                "INSERT INTO reminders (text, fire_time, created_at) VALUES (?, ?, ?)",
-                (text, fire_time, now),
+                "INSERT INTO reminders (text, fire_time, created_at, repeat, power_action)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (text, fire_time, now, repeat, power_action),
             )
             conn.commit()
-        return {"id": cur.lastrowid, "text": text, "fire_time": fire_time, "created_at": now}
+        return {
+            "id": cur.lastrowid,
+            "text": text,
+            "fire_time": fire_time,
+            "created_at": now,
+            "repeat": repeat,
+            "power_action": power_action,
+        }
 
     def due_reminders(self, now: float | None = None) -> list[dict]:
         conn = self._require()
         cutoff = time.time() if now is None else now
         with self._lock:
             rows = conn.execute(
-                "SELECT id, text, fire_time FROM reminders WHERE fired = 0 AND fire_time <= ?"
-                " ORDER BY fire_time",
+                "SELECT id, text, fire_time, repeat, power_action FROM reminders"
+                " WHERE fired = 0 AND fire_time <= ? ORDER BY fire_time",
                 (cutoff,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -119,6 +153,21 @@ class Store:
             )
             conn.commit()
         return cur.rowcount > 0
+
+    def rearm_recurring(self, reminder_id: int, repeat: str, scheduled_fire_time: float) -> None:
+        """Re-queue a recurring reminder at its next occurrence.
+
+        Runs only after mark_fired claimed the row, and the UPDATE is guarded
+        on fired = 1 so only the claimer can re-arm it.
+        """
+        conn = self._require()
+        step = 7 * 86400 if repeat == "weekly" else 86400
+        with self._lock:
+            conn.execute(
+                "UPDATE reminders SET fired = 0, fire_time = ? WHERE id = ? AND fired = 1",
+                (scheduled_fire_time + step, reminder_id),
+            )
+            conn.commit()
 
     def snooze_fired_reminder(self, reminder_id: int, fire_time: float) -> dict | None:
         """Reactivate a delivered reminder at a later time.
@@ -146,7 +195,8 @@ class Store:
         conn = self._require()
         with self._lock:
             rows = conn.execute(
-                "SELECT id, text, fire_time FROM reminders WHERE fired = 0 ORDER BY fire_time"
+                "SELECT id, text, fire_time, repeat, power_action FROM reminders"
+                " WHERE fired = 0 ORDER BY fire_time"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -244,6 +294,4 @@ class Store:
             cur = conn.execute("DELETE FROM messages")
             conn.commit()
         return cur.rowcount
-
-
 store = Store()
