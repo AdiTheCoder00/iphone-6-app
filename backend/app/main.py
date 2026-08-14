@@ -45,7 +45,7 @@ from app.models.schemas import (
     WakeResponse,
 )
 from app.middleware import CompanionTokenMiddleware
-from app.services import home_assistant, tools, tts
+from app.services import smart_home, tools, tts
 from app.services.companion import CompanionUnavailable, companion_service
 from app.services.events import event_hub
 from app.services.proactive import proactive_service
@@ -168,7 +168,7 @@ async def health_check():
     # probes (Ollama 3s + HA 3s) could exceed that on a wedged dependency.
     ollama_ok, ha_ok = await asyncio.gather(
         companion_service.is_available(),
-        home_assistant.is_available(),
+        smart_home.is_available(),
     )
     return HealthResponse(
         status="ok",
@@ -350,11 +350,11 @@ async def pc_status():
 @app.get("/smart/devices", response_model=SmartDevicesResponse)
 async def smart_devices():
     """Smart home devices and their on/off state. Read-only."""
-    if not settings.ha_enabled or not settings.ha_token:
+    if smart_home.provider() == "none":
         return SmartDevicesResponse(available=False)
     try:
-        devices = await home_assistant.list_devices()
-    except home_assistant.HomeAssistantError as e:
+        devices = await smart_home.list_devices()
+    except smart_home.SmartHomeError as e:
         logger.info("Dashboard smart devices unavailable: %s", e)
         return SmartDevicesResponse(available=False)
     return SmartDevicesResponse(
@@ -370,11 +370,11 @@ async def set_smart_device_state(entity_id: str, body: SmartDeviceStateRequest):
     mis-click does is switch a lamp, and switching it back is one more click.
     That is the line for what gets a button here.
     """
-    if not settings.ha_enabled or not settings.ha_token:
-        raise HTTPException(status_code=503, detail="Home Assistant is not configured")
+    if smart_home.provider() == "none":
+        raise HTTPException(status_code=503, detail="No smart home provider is configured")
     try:
-        await home_assistant.set_state(entity_id, body.turn_on)
-    except home_assistant.HomeAssistantError as e:
+        await smart_home.set_state(entity_id, body.turn_on)
+    except smart_home.SmartHomeError as e:
         logger.warning("Smart device control failed for %s: %s", entity_id, e)
         raise HTTPException(status_code=502, detail=str(e)) from e
     return {"entity_id": entity_id, "turn_on": body.turn_on}

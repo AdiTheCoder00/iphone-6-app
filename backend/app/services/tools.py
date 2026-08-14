@@ -732,20 +732,17 @@ def _format_device(device: dict) -> str:
 
 
 def _register_smart_home_tools() -> None:
-    from app.config import settings
-    from app.services import home_assistant as ha
+    from app.services import smart_home as sh
 
-    if not settings.ha_enabled:
-        logger.info("Smart home tools disabled by config")
-        return
-    if not settings.ha_token:
-        logger.info("Smart home tools skipped: no HA_TOKEN configured")
+    active = sh.provider()
+    if active == "none":
+        logger.info("Smart home tools skipped: no provider configured")
         return
 
     async def _list_devices() -> str:
         try:
-            devices = await ha.list_devices()
-        except ha.HomeAssistantError as e:
+            devices = await sh.list_devices()
+        except sh.SmartHomeError as e:
             return f"ERROR: {e}"
         if not devices:
             return "No smart home devices found."
@@ -763,8 +760,8 @@ def _register_smart_home_tools() -> None:
 
     async def _control_device(name: str, turn_on: bool) -> str:
         try:
-            devices = await ha.list_devices()
-        except ha.HomeAssistantError as e:
+            devices = await sh.list_devices()
+        except sh.SmartHomeError as e:
             return f"ERROR: {e}"
 
         matches = _find_devices(devices, name)
@@ -778,8 +775,8 @@ def _register_smart_home_tools() -> None:
         device = matches[0]
         flag = turn_on if isinstance(turn_on, bool) else str(turn_on).strip().lower() in ("true", "1", "yes")
         try:
-            await ha.set_state(device["entity_id"], flag)
-        except ha.HomeAssistantError as e:
+            await sh.set_state(device["entity_id"], flag)
+        except sh.SmartHomeError as e:
             return f"ERROR: {e}"
         return f"{device['name']} turned {'on' if flag else 'off'}."
 
@@ -799,7 +796,7 @@ def _register_smart_home_tools() -> None:
         )
     )
 
-    logger.info("Smart home tools registered (list, control)")
+    logger.info("Smart home tools registered (provider=%s)", active)
 
 
 _register_smart_home_tools()

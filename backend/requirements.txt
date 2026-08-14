@@ -53,3 +53,9 @@ winsdk>=1.0.0b10,<2; sys_platform == "win32"
 # of pc_control.py, but the tool itself is still Windows-only for now (no
 # Linux/macOS media or volume backends exist yet to pair it with).
 psutil>=6.0,<7; sys_platform == "win32"
+
+# Smart home: direct TP-Link Kasa/Tapo control over the LAN, used when
+# SMART_HOME_PROVIDER=kasa. The alternative provider (Home Assistant) needs
+# no dependency here since it is just REST over httpx — but HA has no native
+# Windows build, so this is the path that actually works on this machine.
+python-kasa>=0.10,<0.11

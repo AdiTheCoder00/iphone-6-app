@@ -142,6 +142,22 @@ class Settings(BaseSettings):
     # JSON object in the env var, matching the shape of CORS_ORIGINS below.
     pc_app_whitelist: dict[str, str] = Field(default_factory=dict, validation_alias="PC_APP_WHITELIST")
 
+    # Which smart home backend to use:
+    #   "kasa"           — talk to TP-Link Kasa/Tapo directly on the LAN.
+    #                      No extra service to run, but TP-Link only.
+    #   "home_assistant" — go through Home Assistant, which covers nearly
+    #                      every brand but has to be running somewhere.
+    #   "none"           — smart home tools do not register at all.
+    smart_home_provider: str = Field("none", validation_alias="SMART_HOME_PROVIDER")
+
+    # TP-Link account email/password, required by newer Kasa firmware and all
+    # Tapo devices (the KLAP protocol derives the LOCAL handshake from them —
+    # control never leaves the LAN). Older Kasa devices ignore these.
+    # Real account credentials in a plaintext file: .env is gitignored, and
+    # should stay that way.
+    tplink_username: str = Field("", validation_alias="TPLINK_USERNAME")
+    tplink_password: str = Field("", validation_alias="TPLINK_PASSWORD")
+
     # Smart home, via Home Assistant rather than any device brand directly.
     # HA already speaks local network to TP-Link Kasa/Tapo (and most other
     # brands) with no cloud round-trip, so this backend only ever needs to
