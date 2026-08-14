@@ -62,9 +62,18 @@ export interface SmartDevices {
 }
 
 /* Events arriving over SSE. `connected` is the stream handshake; the rest are
- * things the companion did or was told without being asked. */
+ * things the companion did or was told without being asked. Kept as a closed
+ * union so a new backend event type fails to compile here instead of sailing
+ * through as an untyped string. */
+export type CompanionEventType =
+  | 'connected'
+  | 'reminder'
+  | 'timer'
+  | 'wake'
+  | 'proactive';
+
 export interface CompanionEvent {
-  type: 'connected' | 'reminder' | 'wake' | 'proactive' | string;
+  type: CompanionEventType;
   text?: string;
   emotion?: string;
 }

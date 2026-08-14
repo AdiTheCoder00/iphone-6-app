@@ -14,11 +14,15 @@ interface Props {
 export function ConversationPanel({ messages, error, loading, settings, onChanged }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
 
   const clear = async () => {
     setBusy(true);
+    setFailed(null);
     try {
       await api.clearConversation(settings);
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : 'Action failed');
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -55,6 +59,7 @@ export function ConversationPanel({ messages, error, loading, settings, onChange
       empty={!!messages && messages.length === 0}
       emptyText="No conversation yet."
     >
+      {failed ? <p className="error">{failed}</p> : null}
       <div className="chat">
         {messages?.map((m, i) => (
           <div key={i} className={`bubble bubble--${m.role}`}>

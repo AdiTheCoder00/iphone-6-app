@@ -13,6 +13,7 @@ interface Props {
 
 export function SmartHomePanel({ data, error, loading, settings, onChanged }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
 
   if (!loading && !error && data && !data.available) {
     return (
@@ -26,8 +27,11 @@ export function SmartHomePanel({ data, error, loading, settings, onChanged }: Pr
 
   const toggle = async (entityId: string, turnOn: boolean) => {
     setBusy(entityId);
+    setFailed(null);
     try {
       await api.setSmartDevice(settings, entityId, turnOn);
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : 'Action failed');
     } finally {
       setBusy(null);
       onChanged();
@@ -43,6 +47,7 @@ export function SmartHomePanel({ data, error, loading, settings, onChanged }: Pr
       empty={!!data && data.devices.length === 0}
       emptyText="No lights or switches found."
     >
+      {failed ? <p className="error">{failed}</p> : null}
       <ul className="rows">
         {data?.devices.map((d) => {
           const on = d.state === 'on';
@@ -60,6 +65,7 @@ export function SmartHomePanel({ data, error, loading, settings, onChanged }: Pr
                   className={`toggle ${on ? 'toggle--on' : ''}`}
                   role="switch"
                   aria-checked={on}
+                  aria-label={`${d.name}: ${on ? 'on' : 'off'}`}
                   disabled={busy === d.entity_id}
                   onClick={() => toggle(d.entity_id, !on)}
                   title={on ? 'Turn off' : 'Turn on'}

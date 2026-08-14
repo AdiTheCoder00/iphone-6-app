@@ -80,6 +80,7 @@ export function RemindersPanel({ reminders, error, loading, settings, onChanged 
                 disabled={busy === r.id}
                 onClick={() => act(r.id, () => api.cancelReminder(settings, r.id))}
                 title="Cancel reminder"
+                aria-label="Cancel reminder"
               >
                 ✕
               </button>

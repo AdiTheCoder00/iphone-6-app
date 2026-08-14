@@ -21,17 +21,64 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 In a second terminal, serve the frontend from the repository root:
 
 ```powershell
-python -m http.server 8080 --bind 0.0.0.0
+python serve_frontend.py --port 8080
 ```
 
-Open `http://localhost:8080/companion.html` on the computer. On the phone,
-open `http://<computer-LAN-IP>:8080/companion.html`, then long-press the face
-to open Settings and change **Backend URL** to
+On the phone, open `http://<computer-LAN-IP>:8080/companion.html`, then
+long-press the face to open Settings and change **Backend URL** to
 `http://<computer-LAN-IP>:8000`. `localhost` on the phone refers to the phone,
 not the computer.
 
+`serve_frontend.py` serves **only** the PWA's own files (`companion.html`,
+`qrcode.js`, `sw.js`, `manifest.json`, `icons/`) — everything else in the repo
+answers 404. The repository root also holds `certs/` (private keys),
+`backend/data/` (the conversation database) and `backend/venv`, and a plain
+`python -m http.server` would have exposed all of them to anyone on the LAN,
+so don't fall back to one.
+
 The first use of voice transcription and TTS downloads their local model files;
 the initial response may therefore take longer than later ones.
+
+## Tap-to-talk and the service worker over HTTPS
+
+Tap-to-talk (getUserMedia) and the service worker only work in a secure
+context, so for the phone they need HTTPS:
+
+1. Generate a local CA and a server certificate (see below), then serve:
+
+   ```powershell
+   python serve_frontend.py --port 8443 --cert-dir certs
+   ```
+
+   (`python frontend_https.py` does the same thing on 8443.)
+
+2. Install `certs/companion-ca.crt` on the phone as a trusted root (Settings >
+   General > VPN & Device Management, or install the profile from a page
+   served over the LAN).
+3. Open `https://<computer-LAN-IP>:8443/companion.html` on the phone. `start-servers.ps1` picks HTTPS automatically when `certs/companion-server.crt` exists.
+
+### Local HTTPS certs
+
+`certs/` is gitignored — never commit TLS material. Regenerate a fresh chain
+any time you need one, with your computer's LAN IP substituted everywhere
+`192.168.31.139` appears:
+
+```powershell
+cd certs
+openssl req -x509 -newkey rsa:2048 -nodes -keyout companion-ca.key `
+  -out companion-ca.crt -days 3650 -subj "/CN=Companion Local CA"
+openssl req -newkey rsa:2048 -nodes -keyout companion-server.key `
+  -out companion-server.csr -subj "/CN=companion"
+echo "subjectAltName = IP:<your-LAN-IP>, IP:127.0.0.1, DNS:localhost" | Out-File -Encoding ascii san.cnf
+openssl x509 -req -in companion-server.csr -CA companion-ca.crt `
+  -CAkey companion-ca.key -CAcreateserial -out companion-server.crt `
+  -days 825 -extfile san.cnf
+```
+
+A previous commit published the CA key to a public repo; history was rewritten
+and the CA regenerated. Because the CA is installed as a trusted root on the
+phone, anyone holding `companion-ca.key` could mint a trusted certificate for
+any domain — keep it off the network entirely.
 
 ## Configuration
 

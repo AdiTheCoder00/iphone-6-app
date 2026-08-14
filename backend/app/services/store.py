@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS facts (
     text        TEXT    NOT NULL UNIQUE,
     created_at  REAL    NOT NULL
 );
+
+-- Small key-value scratchpad for service state that should survive a restart
+-- (e.g. which proactive push already fired today). Not user data; the values
+-- are short strings.
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -294,4 +302,26 @@ class Store:
             cur = conn.execute("DELETE FROM messages")
             conn.commit()
         return cur.rowcount
+
+    # --- service state (kv) ---------------------------------------------
+
+    def get_kv(self, key: str) -> str | None:
+        conn = self._require()
+        with self._lock:
+            row = conn.execute(
+                "SELECT value FROM kv WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row else None
+
+    def set_kv(self, key: str, value: str) -> None:
+        conn = self._require()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO kv (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            conn.commit()
+
+
 store = Store()

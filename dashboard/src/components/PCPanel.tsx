@@ -19,7 +19,10 @@ function Meter({ label, percent }: { label: string; percent: number | null }) {
         <span className="meter__value">{Math.round(percent)}%</span>
       </div>
       <div className="meter__track">
-        <div className={`meter__fill meter__fill--${level}`} style={{ width: `${Math.min(100, percent)}%` }} />
+        <div
+          className={`meter__fill meter__fill--${level}`}
+          style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
+        />
       </div>
     </div>
   );

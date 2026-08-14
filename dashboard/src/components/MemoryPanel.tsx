@@ -13,11 +13,17 @@ interface Props {
 
 export function MemoryPanel({ facts, error, loading, settings, onChanged }: Props) {
   const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
 
   const remove = async (id: number) => {
     setBusy(id);
+    setFailed(null);
     try {
       await api.deleteFact(settings, id);
+    } catch (e) {
+      /* Surfaced rather than swallowed: an action that silently does nothing
+       * is worse than one that says why it couldn't. */
+      setFailed(e instanceof Error ? e.message : 'Action failed');
     } finally {
       setBusy(null);
       onChanged();
@@ -33,6 +39,7 @@ export function MemoryPanel({ facts, error, loading, settings, onChanged }: Prop
       empty={!!facts && facts.length === 0}
       emptyText="Nothing remembered yet."
     >
+      {failed ? <p className="error">{failed}</p> : null}
       <ul className="rows">
         {facts?.map((f) => (
           <li key={f.id} className="row">
@@ -46,6 +53,7 @@ export function MemoryPanel({ facts, error, loading, settings, onChanged }: Prop
                 disabled={busy === f.id}
                 onClick={() => remove(f.id)}
                 title="Forget this"
+                aria-label="Forget this"
               >
                 ✕
               </button>

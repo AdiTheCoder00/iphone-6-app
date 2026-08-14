@@ -70,6 +70,16 @@ class TranscriptionService:
         )
         return " ".join(segment.text.strip() for segment in segments).strip()
 
+    async def preload(self) -> None:
+        """Warm the Whisper model at startup so the first tap-to-talk is
+        instant, mirroring tts.preload(). Never raises — on failure the lazy
+        path in _get_model() loads on first use anyway."""
+        try:
+            await self._get_model()
+            logger.info("Whisper model loaded (size=%s)", settings.whisper_model_size)
+        except Exception:
+            logger.warning("Whisper preload failed; will load on first use", exc_info=True)
+
     async def transcribe(self, audio: bytes) -> str:
         """Return the transcript, or "" when the clip holds no real speech."""
         if not audio:

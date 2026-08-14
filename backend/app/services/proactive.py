@@ -122,6 +122,17 @@ class ProactiveService:
             "Two short sentences at most, warm and plain."
         )
 
+    def _save_date(self, key: str, value: str) -> None:
+        """Persist a fired-once-per-day marker so a restart mid-morning does
+        not re-fire the greeting or the rain check. Best-effort: losing the
+        write only costs a duplicate push next boot."""
+        try:
+            from app.services.store import store
+
+            store.set_kv(key, value)
+        except Exception as e:
+            logger.warning("Could not persist %s: %s", key, e)
+
     async def _tick(self) -> None:
         if not settings.proactive_enabled:
             return
@@ -147,6 +158,7 @@ class ProactiveService:
             and now.hour == settings.proactive_morning_hour
         ):
             self._last_morning_date = today
+            self._save_date("proactive.morning_date", today)
             await self._push(self._morning_instruction(), _FALLBACK_MORNING, "happy")
             return
 
@@ -159,6 +171,7 @@ class ProactiveService:
             and self._last_rain_date != today
         ):
             self._last_rain_date = today
+            self._save_date("proactive.rain_date", today)
             try:
                 from app.services import tools as tools_module
 
@@ -247,6 +260,15 @@ class ProactiveService:
             logger.info("Proactive presence disabled")
             return
         if self._task is None or self._task.done():
+            # Pick up "already fired today" markers written before a restart,
+            # so a reboot during the morning hour does not greet twice.
+            try:
+                from app.services.store import store
+
+                self._last_morning_date = store.get_kv("proactive.morning_date")
+                self._last_rain_date = store.get_kv("proactive.rain_date")
+            except Exception as e:
+                logger.warning("Could not load proactive state: %s", e)
             self._task = asyncio.create_task(self._loop())
             logger.info(
                 "Proactive presence started (morning=%02d:00, quiet=%02d:00-%02d:00)",

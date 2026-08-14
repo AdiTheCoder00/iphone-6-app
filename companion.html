@@ -1802,6 +1802,10 @@ window.CompanionChat = (function () {
      turn and silently swallowed its reply. */
   var sendId = 0;
   var bubbleId = 0;
+  /* The blob URL of the image bubble currently on screen, if any. Revoked
+     when the bubble is replaced or dismissed, so a superseded screenshot does
+     not leak its object URL for the lifetime of the page. */
+  var imageUrl = null;
 
   /* Mirrored onto the stage so the bubble can move out from under the input
      with a CSS rule instead of the two elements overlapping. */
@@ -1825,6 +1829,8 @@ window.CompanionChat = (function () {
 
   function showBubble(text, isError, actions) {
     if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+    /* A text bubble replaces whatever image was up — its URL dies here. */
+    if (imageUrl !== null) { URL.revokeObjectURL(imageUrl); imageUrl = null; }
     var myBubble = ++bubbleId;
     bubble.textContent = text;
     bubble.removeAttribute('data-image');
@@ -1855,33 +1861,46 @@ window.CompanionChat = (function () {
       bubbleTimer = null;
       if (myBubble !== bubbleId) return;     // a newer bubble already took over
       bubble.setAttribute('data-visible', 'false');
-      window.Companion.setEmotion('idle');
+      /* Sleep mode must survive a bubble timing out. */
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
     }, hold);
   }
 
-  /* An image bubble (screenshot, QR) — the bubble element is repurposed
-     with an <img> instead of text, same visibility lifecycle. */
-  function showImageBubble(imageUrl, holdMs) {
+  /* An image bubble (screenshot, QR). Accepts either a blob URL (a screenshot)
+     or a ready-made node (the QR canvas) — both get the same visibility
+     lifecycle as a text bubble. */
+  function showImage(source, holdMs) {
     if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+    /* Replacing whatever image is up: the old blob URL dies now, not whenever
+       its own (possibly superseded) timer would have fired. */
+    if (imageUrl !== null) { URL.revokeObjectURL(imageUrl); imageUrl = null; }
     var myBubble = ++bubbleId;
     bubble.textContent = '';
     bubble.setAttribute('data-error', 'false');
     bubble.setAttribute('data-actions', 'false');
     bubble.setAttribute('data-image', 'true');
-    var img = document.createElement('img');
-    img.className = 'bubble__image';
-    img.alt = '';
-    img.src = imageUrl;
-    bubble.appendChild(img);
+    var node;
+    if (typeof source === 'string') {
+      var img = document.createElement('img');
+      img.className = 'bubble__image';
+      img.alt = '';
+      img.src = source;
+      node = img;
+      if (source.indexOf('blob:') === 0) imageUrl = source;
+    } else {
+      node = source;                          // e.g. the QR canvas
+      node.className = 'bubble__image';
+    }
+    bubble.appendChild(node);
     bubble.setAttribute('data-visible', 'true');
     bubbleTimer = setTimeout(function () {
       bubbleTimer = null;
-      if (myBubble !== bubbleId) return;
+      if (myBubble !== bubbleId) return;      // a newer bubble already took over
       bubble.setAttribute('data-visible', 'false');
       bubble.setAttribute('data-image', 'false');
       bubble.textContent = '';
-      if (imageUrl.indexOf('blob:') === 0) URL.revokeObjectURL(imageUrl);
-      window.Companion.setEmotion('idle');
+      if (imageUrl !== null) { URL.revokeObjectURL(imageUrl); imageUrl = null; }
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
     }, holdMs || 8000);
   }
 
@@ -1889,10 +1908,11 @@ window.CompanionChat = (function () {
     function done() {
       if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
       ++bubbleId;
+      if (imageUrl !== null) { URL.revokeObjectURL(imageUrl); imageUrl = null; }
       window.CompanionSpeech.cancel();
       bubble.setAttribute('data-visible', 'false');
       bubble.setAttribute('data-actions', 'false');
-      window.Companion.setEmotion('idle');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
     }
     async function snooze(row) {
       var buttons = row.querySelectorAll('button');
@@ -1922,9 +1942,18 @@ window.CompanionChat = (function () {
     sendBtn.disabled = busy;
   }
 
-    async function send(text) {
+  /* Removes exactly the turn this send pushed. Identity, not position —
+     indexOf matches the object, so a duplicate message text can never remove
+     the wrong turn, and a newer turn sitting above this one survives. */
+  function removeTurn(turn) {
+    var idx = conversation.indexOf(turn);
+    if (idx !== -1) conversation.splice(idx, 1);
+  }
+
+  async function send(text) {
     var mySend = ++sendId;
-    conversation.push({ role: 'user', content: text });
+    var myTurn = { role: 'user', content: text };
+    conversation.push(myTurn);
 
     /* A new turn supersedes the previous reply, so stop speaking it — this
        covers the typed path, where there was no mic press to interrupt. */
@@ -1951,8 +1980,8 @@ window.CompanionChat = (function () {
          they can fix in the settings sheet in ten seconds. */
       if (res.status === 401) {
         clearTimeout(thinkTimer);
-        if (mySend !== sendId) return;
-        conversation.pop();
+        if (mySend !== sendId) { removeTurn(myTurn); return; }
+        removeTurn(myTurn);
         window.Companion.setEmotion('sad');
         showBubble(AUTH_ERROR_TEXT, true);
         return;
@@ -1961,10 +1990,12 @@ window.CompanionChat = (function () {
       var data = await res.json();
 
       clearTimeout(thinkTimer);
-      if (mySend !== sendId) return;         // superseded while in flight
+      /* Superseded while in flight: this turn never earned a reply, so it must
+         not linger as a dangling user turn beneath the newer one. */
+      if (mySend !== sendId) { removeTurn(myTurn); return; }
       if (requestBackend !== window.CompanionConfig.backendUrl()) {
         /* Never render a reply from a backend the user has just replaced. */
-        conversation.pop();
+        removeTurn(myTurn);
         return;
       }
 
@@ -1975,10 +2006,11 @@ window.CompanionChat = (function () {
     } catch (err) {
       clearTimeout(thinkTimer);
       console.error('[Companion] chat failed:', err);
+      /* Drop the user turn we optimistically pushed — on the superseded path
+         as well: the model never saw it, so replaying it as context would
+         misrepresent the conversation. */
+      removeTurn(myTurn);
       if (mySend !== sendId) return;
-      /* Drop the user turn we optimistically pushed: the model never saw it,
-         so replaying it as context would misrepresent the conversation. */
-      conversation.pop();
       window.Companion.setEmotion('sad');
       showBubble(ERROR_TEXT, true);
     } finally {
@@ -2061,7 +2093,7 @@ window.CompanionChat = (function () {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var blob = await res.blob();
       setBusy(false);
-      showImageBubble(URL.createObjectURL(blob));
+      showImage(URL.createObjectURL(blob));
       window.Companion.setEmotion('happy');
     } catch (err) {
       console.error('[Companion] screenshot failed:', err);
@@ -2097,6 +2129,12 @@ window.CompanionChat = (function () {
   }
 
   function connectEvents() {
+    /* A stream already up — open, or still connecting — is the live one. A
+       stale caller (a retry timer racing an already-started reconnect, a
+       watchdog tick mid-attempt) must not tear it down and start a duplicate.
+       Callers that really need a fresh connection (watchdog stall, config
+       change) close the old source themselves first. */
+    if (sse && (sse.readyState === EventSource.CONNECTING || sse.readyState === EventSource.OPEN)) return;
     var myGen = ++sseGeneration;
     if (sse) { try { sse.close(); } catch (e) {} sse = null; }
 
@@ -2113,6 +2151,9 @@ window.CompanionChat = (function () {
       /* A real connection resets the backoff, so the next unrelated blip is
          retried quickly rather than inheriting a long delay. */
       sseRetryDelay = SSE_RETRY_MS;
+      /* A retry timer still pending is now stale — letting it fire would open
+         a duplicate stream on top of this one. */
+      if (sseRetryTimer !== null) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
     };
 
     sse.onmessage = function (e) {
@@ -2161,6 +2202,10 @@ window.CompanionChat = (function () {
     if (document.hidden) return;              // backgrounded tabs must not churn
     if (Date.now() - sseLastEventAt > SSE_STALL_MS) {
       console.warn('[Companion] event stream silent for ' + SSE_STALL_MS + 'ms — reconnecting');
+      /* The stream may still report OPEN while actually dead (iOS kills it
+         silently), so close it before connectEvents, which no-ops on a live
+         stream — otherwise a corpse would never be replaced. */
+      if (sse) { try { sse.close(); } catch (e) {} sse = null; }
       connectEvents();
     }
   }, SSE_STALL_MS / 3);
@@ -2204,6 +2249,10 @@ window.CompanionChat = (function () {
   window.CompanionConfig.onChange(function (key) {
     if (key === 'backendUrl' || key === 'token') {
       if (sseRetryTimer !== null) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+      /* The existing stream now points at the wrong target (the token rides
+         in the URL), so it must be replaced — close it first, since
+         connectEvents no-ops on a live stream. */
+      if (sse) { try { sse.close(); } catch (e) {} sse = null; }
       connectEvents();
     }
   });
@@ -2215,6 +2264,7 @@ window.CompanionChat = (function () {
     send: send,
     isBusy: function () { return inFlight; },
     showBubble: showBubble,
+    showImage: showImage,
     openComposer: openComposer,
     closeComposer: closeComposer,
     loadHistory: loadHistory,
@@ -2320,12 +2370,18 @@ window.CompanionGlance = (function () {
 
   drawClock();
   updateVisibility();
-  setInterval(drawClock, CLOCK_TICK_MS);
+  /* Interval work only runs in the foreground — a hidden tab must not keep
+     fetching weather and reminders for a readout nobody can see. */
+  setInterval(function () { if (!document.hidden) drawClock(); }, CLOCK_TICK_MS);
   refreshWeather();
-  setInterval(refreshWeather, WEATHER_REFRESH_MS);
+  setInterval(function () { if (!document.hidden) refreshWeather(); }, WEATHER_REFRESH_MS);
   /* A minute cadence keeps the countdown honest; the fetch itself only runs
      while the glance is visible (see refreshNextReminder). */
-  setInterval(refreshNextReminder, 60 * 1000);
+  setInterval(function () { if (!document.hidden) refreshNextReminder(); }, 60 * 1000);
+  /* Catch up on whatever was skipped while hidden. */
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { drawClock(); refreshWeather(); refreshNextReminder(); }
+  });
 
   /* Event-driven rather than polled: the face announces changes, and the
      bubble and composer are watched for attribute flips. */
@@ -2415,9 +2471,12 @@ window.CompanionGlance = (function () {
 
   requestWakeLock();
   document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
     /* iOS releases the lock on backgrounding and never restores it, so it has
        to be re-requested every time the page comes back to the foreground. */
-    if (document.visibilityState === 'visible' && wakeLock === null) requestWakeLock();
+    if (wakeLock === null) requestWakeLock();
+    /* Health probing was paused while hidden — resume it now. */
+    checkHealth();
   });
 
   /* --- dim + sleep -------------------------------------------------------- */
@@ -2578,8 +2637,15 @@ window.CompanionGlance = (function () {
       var data = await res.json();
       renderRows(remindersList, remindersCount, data.reminders, 'Nothing scheduled.', function (r) {
         return makeRow(r.text, formatWhen(r.fire_time), async function () {
-          await window.CompanionConfig.request('/reminders/' + r.id, { method: 'DELETE' });
-          loadReminders();
+          try {
+            var res = await window.CompanionConfig.request('/reminders/' + r.id, { method: 'DELETE' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            loadReminders();
+          } catch (e) {
+            /* A failed delete must not remove the row — and the click handler
+               must not become an unhandled rejection. */
+            console.warn('[Companion] could not remove reminder:', e);
+          }
         });
       });
     } catch (e) {
@@ -2594,8 +2660,13 @@ window.CompanionGlance = (function () {
       var data = await res.json();
       renderRows(factsList, factsCount, data.facts, 'Nothing remembered yet.', function (f) {
         return makeRow(f.text, '', async function () {
-          await window.CompanionConfig.request('/facts/' + f.id, { method: 'DELETE' });
-          loadFacts();
+          try {
+            var res = await window.CompanionConfig.request('/facts/' + f.id, { method: 'DELETE' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            loadFacts();
+          } catch (e) {
+            console.warn('[Companion] could not remove fact:', e);
+          }
         });
       });
     } catch (e) {
@@ -2621,10 +2692,7 @@ window.CompanionGlance = (function () {
     qr.addData(payload, 'Byte');
     qr.make();
 
-    if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
-    var myBubble = ++bubbleId;
     var canvas = document.createElement('canvas');
-    canvas.className = 'bubble__image';
     var size = 240;
     canvas.width = size; canvas.height = size;
     var ctx = canvas.getContext('2d');
@@ -2638,20 +2706,9 @@ window.CompanionGlance = (function () {
         if (qr.isDark(r, c)) ctx.fillRect(Math.round(c * scale), Math.round(r * scale), Math.ceil(scale), Math.ceil(scale));
       }
     }
-    bubble.textContent = '';
-    bubble.setAttribute('data-error', 'false');
-    bubble.setAttribute('data-actions', 'false');
-    bubble.setAttribute('data-image', 'true');
-    bubble.appendChild(canvas);
-    bubble.setAttribute('data-visible', 'true');
-    bubbleTimer = setTimeout(function () {
-      bubbleTimer = null;
-      if (myBubble !== bubbleId) return;
-      bubble.setAttribute('data-visible', 'false');
-      bubble.setAttribute('data-image', 'false');
-      bubble.textContent = '';
-      window.Companion.setEmotion('idle');
-    }, 12000);
+    /* The bubble lifecycle (visibility, auto-dismiss, sleep gating) lives in
+       CompanionChat — same path as screenshots. */
+    window.CompanionChat.showImage(canvas, 12000);
   });
 
   /* --- conversation export ------------------------------------------------- */
@@ -2805,6 +2862,13 @@ window.CompanionGlance = (function () {
   var healthTimer = null;
   var healthy = null;                          // null = not yet determined
 
+  function armHealthRetry() {
+    /* Re-arm only in the foreground: a backgrounded tab must not probe the
+       backend every 5s for as long as it stays hidden. The visibilitychange
+       handler re-checks the moment it comes back. */
+    if (!document.hidden) healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+  }
+
   function showRetry(visible, text, action) {
     retry.setAttribute('data-visible', visible ? 'true' : 'false');
     if (text) document.getElementById('retryText').textContent = text;
@@ -2815,6 +2879,7 @@ window.CompanionGlance = (function () {
 
   async function checkHealth() {
     if (healthTimer !== null) { clearTimeout(healthTimer); healthTimer = null; }
+    if (document.hidden) return;               // no probes while backgrounded
     var requestBackend = window.CompanionConfig.backendUrl();
     var health = null;
     try {
@@ -2842,7 +2907,7 @@ window.CompanionGlance = (function () {
     if (health && health.ollama_connected && health.model_status === 'warming') {
       showRetry(true, 'warming up the companion', 'wait');
       healthy = null;
-      healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+      armHealthRetry();
       return;
     }
 
@@ -2850,7 +2915,7 @@ window.CompanionGlance = (function () {
       showRetry(true, 'server ready · model unavailable', 'retry');
       if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
       healthy = false;
-      healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+      armHealthRetry();
       return;
     }
 
@@ -2859,7 +2924,7 @@ window.CompanionGlance = (function () {
       if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
     }
     healthy = false;
-    healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+    armHealthRetry();
   }
 
   /* --- on-screen keyboard -------------------------------------------------
@@ -3012,7 +3077,7 @@ window.CompanionVoice = (function () {
       if (myTake !== takeId) return;          // superseded while waiting
       recording = false;
       micBtn.setAttribute('data-recording', 'false');
-      window.Companion.setEmotion('idle');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
       /* NotAllowedError is a deliberate refusal: stop offering the button. */
       if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
         disableVoice('permission denied');
@@ -3043,7 +3108,7 @@ window.CompanionVoice = (function () {
       stream = null;
       recording = false;
       micBtn.setAttribute('data-recording', 'false');
-      window.Companion.setEmotion('idle');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
       disableVoice('MediaRecorder construction failed');
       return;
     }
@@ -3102,13 +3167,13 @@ window.CompanionVoice = (function () {
     } else {
       /* Released before the recorder ever started. */
       releaseStream();
-      window.Companion.setEmotion('idle');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
     }
   }
 
   async function handleClip(blob, durationMs) {
     if (durationMs < MIN_RECORD_MS || blob.size === 0) {
-      window.Companion.setEmotion('idle');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
       return;
     }
 
@@ -3138,7 +3203,7 @@ window.CompanionVoice = (function () {
 
     if (!text) {
       /* Silence is not an error: just settle back. */
-      window.Companion.setEmotion('idle');
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
       return;
     }
 

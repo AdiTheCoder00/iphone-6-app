@@ -4,6 +4,7 @@ import json
 import logging
 import tempfile
 import time
+import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -22,6 +23,7 @@ truststore.inject_into_ssl()
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings, unrecognized_env_keys
@@ -129,11 +131,15 @@ async def lifespan(app: FastAPI):
     # Same reasoning for TTS: warm the Kokoro session in the background so the
     # first /speak after boot does not pay the load. Never raises.
     tts_preload_task = asyncio.create_task(tts.preload())
+    # Same again for Whisper: the first tap-to-talk after boot should not pay
+    # the model load. Never raises; lazy path loads on first use if skipped.
+    whisper_preload_task = asyncio.create_task(transcription_service.preload())
 
     yield
 
     prewarm_task.cancel()
     tts_preload_task.cancel()
+    whisper_preload_task.cancel()
     # Give the cancelled prewarm request a chance to release its HTTP resources
     # before the shared client is closed below.  Awaiting it also prevents a
     # pending-task warning during a fast server restart.
@@ -141,6 +147,8 @@ async def lifespan(app: FastAPI):
         await prewarm_task
     with suppress(asyncio.CancelledError):
         await tts_preload_task
+    with suppress(asyncio.CancelledError):
+        await whisper_preload_task
     await proactive_service.stop()
     await reminder_service.stop()
     await timers.timer_service.stop()
@@ -482,8 +490,9 @@ async def screenshot_endpoint():
 
     if not pc_control.IS_WINDOWS or not settings.pc_control_enabled:
         raise HTTPException(status_code=404, detail="PC control is not available")
-    # Written to the system temp dir and removed once the response is sent.
-    shot = Path(tempfile.gettempdir()) / "companion_screenshot.png"
+    # A unique name per request: a fixed path would let two concurrent calls
+    # clobber each other mid-write. Cleaned up after the response is sent.
+    shot = Path(tempfile.gettempdir()) / f"companion_screenshot_{uuid.uuid4().hex}.png"
     try:
         await asyncio.to_thread(pc_control.capture_screenshot, str(shot))
     except pc_control.PCControlError as e:
@@ -491,7 +500,12 @@ async def screenshot_endpoint():
         raise HTTPException(status_code=502, detail="Could not capture the screen") from e
     if not shot.is_file():
         raise HTTPException(status_code=502, detail="Could not capture the screen")
-    return FileResponse(shot, media_type="image/png", filename="screen.png")
+    return FileResponse(
+        shot,
+        media_type="image/png",
+        filename="screen.png",
+        background=BackgroundTask(shot.unlink, missing_ok=True),
+    )
 
 
 @app.post("/vision")

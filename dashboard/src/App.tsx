@@ -32,7 +32,7 @@ export default function App() {
   const facts = usePoll(api.facts, settings, LIST_INTERVAL);
   const conversation = usePoll(api.conversation, settings, LIST_INTERVAL);
   const smart = usePoll(api.smartDevices, settings, LIST_INTERVAL);
-  const { events, connected } = useEvents(settings);
+  const { events, connected, failed } = useEvents(settings);
 
   /* A fired reminder or an unprompted message means the lists are already
    * stale — refresh them off the event stream instead of waiting out the
@@ -86,7 +86,7 @@ export default function App() {
           settings={settings}
           onChanged={smart.refresh}
         />
-        <EventFeed events={events} connected={connected} />
+        <EventFeed events={events} connected={connected} failed={failed} />
         <ConversationPanel
           messages={conversation.data}
           error={conversation.error}

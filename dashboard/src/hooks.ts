@@ -14,9 +14,15 @@ export interface Poll<T> {
 /**
  * Poll an endpoint on an interval, with the refresh exposed so a mutation can
  * force an immediate re-read instead of waiting out the timer.
+ *
+ * Each run aborts the previous in-flight request: without that, a fetch that
+ * outlives its interval (a slow backend, a warm model) would stack duplicate
+ * requests, and an older response could land after a newer one and overwrite
+ * fresh data with stale. Aborting also covers the settings-change case — the
+ * old request is killed the moment the new settings take effect.
  */
 export function usePoll<T>(
-  fetcher: (settings: Settings) => Promise<T>,
+  fetcher: (settings: Settings, signal?: AbortSignal) => Promise<T>,
   settings: Settings,
   intervalMs: number,
 ): Poll<T> {
@@ -28,13 +34,20 @@ export function usePoll<T>(
    * just because an inline arrow function is a new identity each time. */
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+  const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const result = await fetcherRef.current(settings);
+      const result = await fetcherRef.current(settings, controller.signal);
       setData(result);
       setError(null);
     } catch (e) {
+      /* An aborted request is the previous one being superseded — not an
+       * error worth showing. */
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       setError(
         e instanceof UnauthorizedError
           ? 'Unauthorized — check the access token'
@@ -43,6 +56,7 @@ export function usePoll<T>(
             : 'Request failed',
       );
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
   }, [settings]);
@@ -57,6 +71,8 @@ export function usePoll<T>(
     return () => {
       cancelled = true;
       clearInterval(id);
+      abortRef.current?.abort();
+      abortRef.current = null;
     };
   }, [run, intervalMs]);
 
@@ -70,6 +86,10 @@ export interface EventLogEntry extends CompanionEvent {
 
 const SSE_RETRY_MS = 3000;
 const SSE_RETRY_MAX_MS = 60000;
+/* Consecutive failed connects before giving up. A wrong token or a dead host
+ * never fixes itself, and a flat retry loop would just generate failed
+ * requests forever — after this many, the feed reports failure instead. */
+const SSE_MAX_FAILURES = 10;
 
 /**
  * Live SSE feed. Keeps the most recent `limit` events, and reconnects on drop
@@ -78,12 +98,13 @@ const SSE_RETRY_MAX_MS = 60000;
  *
  * Backoff doubles per consecutive failure up to a minute. A flat retry is
  * right for a backend that restarted, but wrong for a missing or wrong token:
- * that never fixes itself, and a flat 3s loop just generates failed requests
- * forever.
+ * that never fixes itself, so after SSE_MAX_FAILURES the feed stops retrying
+ * and reports `failed` to the UI.
  */
 export function useEvents(settings: Settings, limit = 50) {
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [connected, setConnected] = useState(false);
+  const [failed, setFailed] = useState(false);
   const nextId = useRef(0);
 
   useEffect(() => {
@@ -91,12 +112,32 @@ export function useEvents(settings: Settings, limit = 50) {
     let retry: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
     let delay = SSE_RETRY_MS;
+    let failures = 0;
+    let retryPending = false;
+
+    /* Fresh settings mean a different backend: events from the old one are
+     * from a different server and must not linger on screen. */
+    setEvents([]);
+    setConnected(false);
+    setFailed(false);
 
     const scheduleRetry = () => {
-      if (closed) return;
+      /* retryPending stops a second onerror from scheduling a second
+       * EventSource before the first retry fires. */
+      if (closed || retryPending) return;
+      failures += 1;
+      if (failures >= SSE_MAX_FAILURES) {
+        setConnected(false);
+        setFailed(true);
+        return;
+      }
+      retryPending = true;
       const wait = delay;
       delay = Math.min(delay * 2, SSE_RETRY_MAX_MS);
-      retry = setTimeout(connect, wait);
+      retry = setTimeout(() => {
+        retryPending = false;
+        connect();
+      }, wait);
     };
 
     const connect = () => {
@@ -109,24 +150,43 @@ export function useEvents(settings: Settings, limit = 50) {
       }
 
       source.onopen = () => {
-        /* A real connection resets the backoff. */
+        /* A real connection resets the backoff, the failure counter, and any
+         * retry that was still pending — otherwise a late retry timer would
+         * kill the healthy stream and reconnect for nothing. */
         delay = SSE_RETRY_MS;
+        failures = 0;
+        retryPending = false;
+        if (retry) {
+          clearTimeout(retry);
+          retry = null;
+        }
+        setFailed(false);
         setConnected(true);
       };
 
       source.onmessage = (e) => {
-        let payload: CompanionEvent;
+        let payload: unknown;
         try {
-          payload = JSON.parse(e.data) as CompanionEvent;
+          payload = JSON.parse(e.data);
         } catch {
           return;
         }
-        if (payload.type === 'connected') {
+        /* The stream is server-controlled: guard its shape so a malformed
+         * payload cannot crash the handler with a TypeError. */
+        if (
+          typeof payload !== 'object' ||
+          payload === null ||
+          typeof (payload as CompanionEvent).type !== 'string'
+        ) {
+          return;
+        }
+        const event = payload as CompanionEvent;
+        if (event.type === 'connected') {
           setConnected(true);
           return;
         }
         setEvents((prev) =>
-          [{ ...payload, id: nextId.current++, at: new Date() }, ...prev].slice(0, limit),
+          [{ ...event, id: nextId.current++, at: new Date() }, ...prev].slice(0, limit),
         );
       };
 
@@ -146,5 +206,5 @@ export function useEvents(settings: Settings, limit = 50) {
     };
   }, [settings, limit]);
 
-  return { events, connected };
+  return { events, connected, failed };
 }

@@ -112,7 +112,10 @@ body {
 /* --- layout -------------------------------------------------------------- */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  /* minmax(0, 1fr) rather than minmax(330px, 1fr): with a fixed minimum the
+   * track cannot shrink below 330px, so a window narrower than ~378px (after
+   * the .app padding) overflows horizontally instead of wrapping. */
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 18px;
   align-items: start;
 }
@@ -272,6 +275,7 @@ body {
 .pill { padding: 3px 9px; border-radius: 9px; font-size: 11px; }
 .pill--ok { background: rgba(92, 230, 184, 0.14); color: var(--ok); }
 .pill--warn { background: rgba(240, 194, 106, 0.14); color: var(--warn); }
+.pill--bad { background: rgba(232, 139, 139, 0.14); color: var(--bad); }
 
 .tag {
   display: inline-block;
@@ -287,3 +291,8 @@ body {
 .tag--proactive { background: rgba(240, 194, 106, 0.14); color: var(--warn); }
 
 .event__text { font-size: 13px; }
+
+/* --- reduced motion ------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

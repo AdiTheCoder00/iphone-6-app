@@ -68,12 +68,13 @@ async function request<T>(
   settings: Settings,
   path: string,
   init: RequestInit = {},
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
   if (settings.token) headers['X-Companion-Token'] = settings.token;
   if (init.body) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(base(settings) + path, { ...init, headers });
+  const response = await fetch(base(settings) + path, { ...init, headers, signal });
   if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   if (response.status === 204) return undefined as T;
@@ -81,10 +82,12 @@ async function request<T>(
 }
 
 export const api = {
-  health: (s: Settings) => request<Health>(s, '/health'),
-  pcStatus: (s: Settings) => request<PCStatus>(s, '/status/pc'),
-  reminders: (s: Settings) =>
-    request<{ reminders: Reminder[] }>(s, '/reminders').then((r) => r.reminders),
+  health: (s: Settings, signal?: AbortSignal) =>
+    request<Health>(s, '/health', {}, signal),
+  pcStatus: (s: Settings, signal?: AbortSignal) =>
+    request<PCStatus>(s, '/status/pc', {}, signal),
+  reminders: (s: Settings, signal?: AbortSignal) =>
+    request<{ reminders: Reminder[] }>(s, '/reminders', {}, signal).then((r) => r.reminders),
   cancelReminder: (s: Settings, id: number) =>
     request<unknown>(s, `/reminders/${id}`, { method: 'DELETE' }),
   snoozeReminder: (s: Settings, id: number, minutes: number) =>
@@ -92,14 +95,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ minutes }),
     }),
-  facts: (s: Settings) => request<{ facts: Fact[] }>(s, '/facts').then((r) => r.facts),
+  facts: (s: Settings, signal?: AbortSignal) =>
+    request<{ facts: Fact[] }>(s, '/facts', {}, signal).then((r) => r.facts),
   deleteFact: (s: Settings, id: number) =>
     request<unknown>(s, `/facts/${id}`, { method: 'DELETE' }),
-  conversation: (s: Settings) =>
-    request<{ messages: ChatMessage[] }>(s, '/conversation').then((r) => r.messages),
+  conversation: (s: Settings, signal?: AbortSignal) =>
+    request<{ messages: ChatMessage[] }>(s, '/conversation', {}, signal).then((r) => r.messages),
   clearConversation: (s: Settings) =>
     request<unknown>(s, '/conversation', { method: 'DELETE' }),
-  smartDevices: (s: Settings) => request<SmartDevices>(s, '/smart/devices'),
+  smartDevices: (s: Settings, signal?: AbortSignal) =>
+    request<SmartDevices>(s, '/smart/devices', {}, signal),
   setSmartDevice: (s: Settings, entityId: string, turnOn: boolean) =>
     request<unknown>(s, `/smart/devices/${encodeURIComponent(entityId)}/state`, {
       method: 'POST',
