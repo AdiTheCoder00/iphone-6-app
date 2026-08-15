@@ -208,17 +208,46 @@ class ReminderService:
                 )
 
     async def _poll_loop(self) -> None:
+        # Set as soon as the events have been handed to subscribers. The
+        # publish loop is synchronous (no await points), so once the power
+        # actions are being run every event has been delivered; the flag
+        # tells the cancellation handler exactly that.
+        published: set[int] = set()
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 # Claims happen in the thread; publishing stays on the loop.
-                events, power_actions = await asyncio.to_thread(self.check_reminders)
+                # The claim is shielded: to_thread cannot be interrupted, so
+                # a shutdown arriving mid-claim would leave rows marked fired
+                # and never delivered. On cancellation, re-arm those claims.
+                claim_task = asyncio.create_task(
+                    asyncio.to_thread(self.check_reminders)
+                )
+                events, power_actions = await asyncio.shield(claim_task)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
                     logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
+                published = {r["id"] for r in events}
                 for row in power_actions:
                     await self._run_power_action(row)
             except asyncio.CancelledError:
+                try:
+                    if not claim_task.done():
+                        await asyncio.shield(claim_task)
+                    events, power_actions = claim_task.result()
+                except Exception:
+                    events, power_actions = [], []
+                for reminder in events + power_actions:
+                    # Events already handed to subscribers ARE the delivery —
+                    # re-arming them would just fire them again next boot.
+                    # Power actions get re-armed unconditionally: the action
+                    # itself may never have run.
+                    if reminder["id"] in published:
+                        continue
+                    if store.unmark_fired(reminder["id"]):
+                        logger.warning(
+                            "Re-armed reminder %d after shutdown", reminder["id"]
+                        )
                 raise
             except Exception as e:
                 # One bad reminder must not kill the loop for all the others.

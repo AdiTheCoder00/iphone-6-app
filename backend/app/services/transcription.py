@@ -9,6 +9,7 @@ is. Hence a small model on CPU/int8 by default.
 import asyncio
 import io
 import logging
+import re
 
 from app.config import settings
 
@@ -20,6 +21,15 @@ _SILENCE_ARTEFACTS = {
     "you", "thank you.", "thank you", "thanks for watching!", "thanks for watching.",
     ".", "..", "...", "bye.", "bye", "you're welcome.", "[blank_audio]",
 }
+
+
+def _normalize(text: str) -> str:
+    """Whisper varies the casing and punctuation of the same artefact
+    ("Thank you." / "thank you!"); compare letters and spaces only."""
+    return re.sub(r"[^\w\s]", "", text.lower()).strip()
+
+
+_ARTEFACTS_NORMALIZED = {_normalize(a) for a in _SILENCE_ARTEFACTS}
 
 
 class TranscriptionError(RuntimeError):
@@ -94,7 +104,7 @@ class TranscriptionService:
 
         # Treat a silence artefact as silence: better to do nothing than to
         # send the model a phantom "thank you".
-        if text.strip().lower() in _SILENCE_ARTEFACTS:
+        if _normalize(text) in _ARTEFACTS_NORMALIZED:
             logger.info("Discarded silence artefact: %r", text)
             return ""
         return text

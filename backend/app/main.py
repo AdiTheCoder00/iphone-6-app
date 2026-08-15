@@ -162,7 +162,8 @@ async def lifespan(app: FastAPI):
     # local so the task is not garbage-collected mid-flight.
     prewarm_task = asyncio.create_task(companion_service.prewarm())
     # Same reasoning for TTS: warm the Kokoro session in the background so the
-    # first /speak after boot does not pay the load. Never raises.
+    # first /speak after boot does not pay the load. Never raises. preload()
+    # itself no-ops when TTS is disabled, so no download happens then either.
     tts_preload_task = asyncio.create_task(tts.preload())
     # Same again for Whisper: the first tap-to-talk after boot should not pay
     # the model load. Never raises; lazy path loads on first use if skipped.
@@ -182,6 +183,7 @@ async def lifespan(app: FastAPI):
         await tts_preload_task
     with suppress(asyncio.CancelledError):
         await whisper_preload_task
+    await tts.shutdown()
     await proactive_service.stop()
     await reminder_service.stop()
     await timers.timer_service.stop()
@@ -540,21 +542,30 @@ async def screenshot_endpoint():
     if not pc_control.IS_WINDOWS or not settings.pc_control_enabled:
         raise HTTPException(status_code=404, detail="PC control is not available")
     # A unique name per request: a fixed path would let two concurrent calls
-    # clobber each other mid-write. Cleaned up after the response is sent.
+    # clobber each other mid-write. The FileResponse owns the file once handed
+    # over (its BackgroundTask unlinks it after the stream); every other exit
+    # path — a capture error, a client disconnect mid-capture — must clean up
+    # or the temp dir accumulates screenshots.
     shot = Path(tempfile.gettempdir()) / f"companion_screenshot_{uuid.uuid4().hex}.png"
+    delivered = False
     try:
-        await asyncio.to_thread(pc_control.capture_screenshot, str(shot))
-    except pc_control.PCControlError as e:
-        logger.warning("Screenshot failed: %s", e)
-        raise HTTPException(status_code=502, detail="Could not capture the screen") from e
-    if not shot.is_file():
-        raise HTTPException(status_code=502, detail="Could not capture the screen")
-    return FileResponse(
-        shot,
-        media_type="image/png",
-        filename="screen.png",
-        background=BackgroundTask(shot.unlink, missing_ok=True),
-    )
+        try:
+            await asyncio.to_thread(pc_control.capture_screenshot, str(shot))
+        except pc_control.PCControlError as e:
+            logger.warning("Screenshot failed: %s", e)
+            raise HTTPException(status_code=502, detail="Could not capture the screen") from e
+        if not shot.is_file():
+            raise HTTPException(status_code=502, detail="Could not capture the screen")
+        delivered = True
+        return FileResponse(
+            shot,
+            media_type="image/png",
+            filename="screen.png",
+            background=BackgroundTask(shot.unlink, missing_ok=True),
+        )
+    finally:
+        if not delivered:
+            shot.unlink(missing_ok=True)
 
 
 @app.post("/vision")
@@ -600,14 +611,22 @@ async def events(request: Request):
     async def generate():
         queue = event_hub.subscribe()
         try:
-            # Lets the frontend distinguish "connected" from "still dialling".
+            # Let the frontend distinguish "connected" from "still dialling".
             yield sse_event({"type": "connected"})
             # Someone is listening again: deliver anything that came due while
             # the screen was off, without waiting up to a full poll interval.
             # Guarded so a transient store error churns the reconnect instead
             # of killing the stream outright.
             try:
-                events, power_actions = await asyncio.to_thread(reminder_service.check_reminders)
+                # asyncio.to_thread cannot be interrupted: the scan runs to
+                # completion on its worker thread even if the client
+                # disconnects now, so rows it claims are marked fired with no
+                # one left to deliver them. Shield the claim, and on
+                # cancellation re-arm whatever was claimed before re-raising.
+                claim_task = asyncio.create_task(
+                    asyncio.to_thread(reminder_service.check_reminders)
+                )
+                events, power_actions = await asyncio.shield(claim_task)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
                 # Rows claimed here are marked fired and will not be picked up
@@ -616,6 +635,22 @@ async def events(request: Request):
                 # happens instead of being silently dropped.
                 for row in power_actions:
                     await reminder_service._run_power_action(row)
+            except asyncio.CancelledError:
+                # The client went away mid-claim. The thread already finished
+                # and marked the rows fired; re-arm them so the next listener
+                # or the poll loop delivers them instead of losing them.
+                try:
+                    if not claim_task.done():
+                        await asyncio.shield(claim_task)
+                    events, power_actions = claim_task.result()
+                except Exception:
+                    events, power_actions = [], []
+                for reminder in events + power_actions:
+                    if store.unmark_fired(reminder["id"]):
+                        logger.warning(
+                            "Re-armed reminder %d after disconnect", reminder["id"]
+                        )
+                raise
             except Exception as e:
                 logger.warning("Reminder check on connect failed: %s", e, exc_info=True)
             while True:

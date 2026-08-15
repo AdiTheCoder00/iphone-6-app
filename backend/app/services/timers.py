@@ -77,13 +77,21 @@ class TimerService:
 
     async def _loop(self) -> None:
         while True:
-            await asyncio.sleep(TICK_SECONDS)
-            now = time.monotonic()
-            due = [t for t in self._timers.values() if now >= t["end_at"]]
-            for timer in due:
-                self._timers.pop(timer["id"], None)
-                event_hub.publish(timer_event(timer))
-                logger.info("Timer %d fired: %s", timer["id"], timer["text"])
+            try:
+                await asyncio.sleep(TICK_SECONDS)
+                now = time.monotonic()
+                due = [t for t in self._timers.values() if now >= t["end_at"]]
+                for timer in due:
+                    self._timers.pop(timer["id"], None)
+                    event_hub.publish(timer_event(timer))
+                    logger.info("Timer %d fired: %s", timer["id"], timer["text"])
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # One bad publish must not kill the timer service for the rest
+                # of the session — a timed-out bucket of water matters more
+                # than the log line that would have documented the failure.
+                logger.error("Timer tick failed: %s", e, exc_info=True)
 
     def start(self) -> None:
         if self._task is None or self._task.done():

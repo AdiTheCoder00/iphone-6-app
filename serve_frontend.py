@@ -182,6 +182,12 @@ class CompanionHandler(SimpleHTTPRequestHandler):
         would keep working if that ever changes). Returns True when the
         request was handled, False to continue with the PWA whitelist path.
         """
+        # Per-request decision, reset here: the flag must never leak from a
+        # /dashboard/ response onto a later request on the same keep-alive
+        # connection — companion.html carries an inline script that the
+        # dashboard CSP would block.
+        self._dashboard_csp = False
+
         path = urllib.parse.urlparse(self.path).path
         if path == "/dashboard":
             self.send_response(301)

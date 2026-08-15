@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from app.services.store import store
 
 
@@ -43,7 +45,10 @@ def test_rearm_recurring_daily(fresh_store):
     store.rearm_recurring(row["id"], "daily", row["fire_time"])
     after = store.due_reminders(time.time() + 90000)
     assert [r["id"] for r in after] == [row["id"]]
-    assert after[0]["fire_time"] == row["fire_time"] + 86400
+    # Calendar arithmetic (fromtimestamp + 1 day) round-trips through the
+    # platform's local-time conversion, which is not bit-exact — the intent
+    # is "same wall-clock time tomorrow".
+    assert after[0]["fire_time"] == pytest.approx(row["fire_time"] + 86400)
 
 
 def test_rearm_recurring_weekly(fresh_store):
@@ -51,7 +56,7 @@ def test_rearm_recurring_weekly(fresh_store):
     store.mark_fired(row["id"])
     store.rearm_recurring(row["id"], "weekly", row["fire_time"])
     after = store.due_reminders(time.time() + 7 * 90000)
-    assert after[0]["fire_time"] == row["fire_time"] + 7 * 86400
+    assert after[0]["fire_time"] == pytest.approx(row["fire_time"] + 7 * 86400)
 
 
 def test_rearm_requires_fired_claim(fresh_store):

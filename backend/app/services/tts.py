@@ -52,9 +52,13 @@ _kokoro = None
 _load_lock = asyncio.Lock()
 
 # TTS runs on its own single worker: a long load or download must not starve
-# the shared default pool that /chat and the store calls use.
-_TTS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1, thread_name_prefix="tts"
+# the shared default pool that /chat and the store calls use. Created only
+# when TTS is enabled — a disabled TTS should never spin up a thread (or, via
+# preload, download ~350 MB at boot).
+_TTS_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = (
+    concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts")
+    if settings.tts_enabled
+    else None
 )
 
 
@@ -122,10 +126,21 @@ async def preload() -> None:
     pays the whole model + phonemizer load. Never raises — on failure the
     lazy path in get_kokoro() loads on first use anyway.
     """
+    if not settings.tts_enabled:
+        logger.info("TTS disabled - skipping preload")
+        return
     try:
         await get_kokoro()
     except Exception:
         logger.warning("TTS preload failed; will load on first use", exc_info=True)
+
+
+async def shutdown() -> None:
+    """Release the TTS worker thread at server teardown."""
+    global _TTS_EXECUTOR
+    if _TTS_EXECUTOR is not None:
+        _TTS_EXECUTOR.shutdown(wait=True, cancel_futures=True)
+        _TTS_EXECUTOR = None
 
 
 async def synthesize(text: str) -> bytes:
@@ -135,6 +150,8 @@ async def synthesize(text: str) -> bytes:
         raise TTSError("nothing to speak")
     if len(text) > MAX_TTS_CHARS:
         raise TTSError(f"text too long for TTS ({len(text)} > {MAX_TTS_CHARS} chars)")
+    if _TTS_EXECUTOR is None:
+        raise TTSError("TTS is disabled")
 
     kokoro = await get_kokoro()
 

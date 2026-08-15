@@ -37,6 +37,28 @@ function Test-PortListening([int]$port) {
   return ($null -ne $conn)
 }
 
+# uvicorn/frontend logs append forever; on a desk machine that runs for
+# months that is unbounded disk growth. Rotate at start, keeping one .1
+# copy. While the server is running the file is open without FILE_SHARE_
+# DELETE, so the move silently fails (SilentlyContinue) and the next
+# restart catches it - rotation happens at every boot, which bounds each
+# session's growth.
+function Rotate-Log([string]$path) {
+  if (Test-Path $path) {
+    if ((Get-Item $path).Length -gt 5MB) {
+      Move-Item -Path $path -Destination "$path.1" -Force
+    }
+  }
+}
+
+# Stale-instance kills must only ever touch OUR servers, not some other
+# python the user has running on the same port.
+function Is-CompanionProcess([int]$procId) {
+  $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+  if (-not $cim) { return $false }
+  return (($cim.Name -match 'python') -and ($cim.CommandLine -match 'uvicorn|serve_frontend'))
+}
+
 $cert = Join-Path $root 'certs\companion-server.crt'
 $hasCert = Test-Path $cert
 
@@ -60,7 +82,7 @@ if ($backendRunning -and $previousScheme -and $previousScheme -ne $scheme) {
   # on the mixed-content failure path until a reboot.
   $conn = Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object -First 1
   $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-  if ($proc -and $proc.ProcessName -match 'python') {
+  if ($proc -and (Is-CompanionProcess $proc.Id)) {
     Stop-Process -Id $proc.Id -Force
     $backendRunning = $false
     Write-Host "Stopped stale backend (was $previousScheme, now $scheme)"
@@ -74,6 +96,7 @@ if (-not $backendRunning) {
   if ($hasCert) {
     $backendArgs += ' --ssl-keyfile "' + $key + '" --ssl-certfile "' + $cert + '"'
   }
+  Rotate-Log $backendOut; Rotate-Log $backendErr
   Start-Process -FilePath $python `
     -ArgumentList $backendArgs `
     -WorkingDirectory "$root\backend" -WindowStyle Hidden `
@@ -106,13 +129,14 @@ if (-not $frontRunning -and $previousPort -and $previousPort -ne $frontPort -and
   # would keep serving a plain-HTTP app with no service worker or mic.
   $conn = Get-NetTCPConnection -LocalPort $previousPort -State Listen | Select-Object -First 1
   $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-  if ($proc -and $proc.ProcessName -match 'python') {
+  if ($proc -and (Is-CompanionProcess $proc.Id)) {
     Stop-Process -Id $proc.Id -Force
     Write-Host "Stopped stale frontend on :$previousPort (port changed to :$frontPort)"
   }
 }
 
 if (-not $frontRunning) {
+  Rotate-Log $frontOut; Rotate-Log $frontErr
   Start-Process -FilePath $python `
     -ArgumentList $frontArgs `
     -WorkingDirectory $root -WindowStyle Hidden `

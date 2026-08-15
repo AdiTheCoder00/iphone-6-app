@@ -1,0 +1,6 @@
+# Test suite, separate from the runtime requirements on purpose: a unit test
+# must never run the machine-side effects (sleep/shutdown/clipboard), and the
+# suite is only run from the backend/ directory by the developer.
+-r requirements.txt
+pytest>=8,<9
+pytest-asyncio>=0.24,<1

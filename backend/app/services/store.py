@@ -64,6 +64,11 @@ class Store:
         self._lock = threading.Lock()
 
     def init(self) -> None:
+        # Re-init must not leak the previous connection: the test suite
+        # re-points db_path per test and calls init() again, and a stray
+        # connection would keep the old file locked under WAL.
+        if self._conn is not None:
+            self.close()
         path = Path(settings.resolved_db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -187,12 +192,19 @@ class Store:
         Runs only after mark_fired claimed the row, and the UPDATE is guarded
         on fired = 1 so only the claimer can re-arm it.
         """
+        from datetime import datetime, timedelta
+
         conn = self._require()
-        step = 7 * 86400 if repeat == "weekly" else 86400
+        # Calendar arithmetic rather than adding fixed seconds: across a DST
+        # shift, fire_time + 86400 lands an hour off the intended wall clock
+        # (e.g. a 09:00 daily reminder slowly becoming an 08:00 one).
+        when = datetime.fromtimestamp(scheduled_fire_time)
+        step = timedelta(days=7) if repeat == "weekly" else timedelta(days=1)
+        next_fire = (when + step).timestamp()
         with self._lock:
             conn.execute(
                 "UPDATE reminders SET fired = 0, fire_time = ? WHERE id = ? AND fired = 1",
-                (scheduled_fire_time + step, reminder_id),
+                (next_fire, reminder_id),
             )
             conn.commit()
 

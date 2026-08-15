@@ -39,6 +39,11 @@ _last_error_at = 0.0
 # would each kick off their own full LAN scan.
 _discovery_lock = asyncio.Lock()
 
+# Background refresh kicked off by /health probes so a probe never blocks on
+# the multi-second discovery broadcast; the set keeps it alive (pending tasks
+# would otherwise be garbage-collected mid-scan).
+_background_scan: asyncio.Task | None = None
+
 
 class TPLinkError(RuntimeError):
     """Discovery or control failed."""
@@ -157,11 +162,29 @@ async def set_state(entity_id: str, turn_on: bool) -> None:
         raise TPLinkError(f"could not switch '{entity_id}' ({e})") from e
 
 
+async def _refresh_cache() -> None:
+    """Discover in the background; the result lands in the shared cache."""
+    try:
+        await _discover(force=True)
+    except Exception as e:
+        logger.info("Background TP-Link refresh failed: %s", e)
+
+
 async def is_available() -> bool:
-    """Cheap probe for /health. Never raises."""
+    """Cheap probe for /health. Never raises, never blocks on a scan.
+
+    Discovery is a multi-second LAN broadcast, so /health must not wait for
+    one: a cold or stale cache triggers a background refresh and the probe
+    reports the last known state (False until the first scan has ever
+    landed)."""
+    global _background_scan
     if settings.smart_home_provider != "kasa":
         return False
     try:
-        return len(await _discover()) > 0
-    except TPLinkError:
+        fresh = _cached_at and (time.monotonic() - _cached_at < _DISCOVERY_TTL_SECONDS)
+        if not fresh:
+            if _background_scan is None or _background_scan.done():
+                _background_scan = asyncio.create_task(_refresh_cache())
+        return _cached_at > 0 and len(_cache) > 0
+    except Exception:
         return False

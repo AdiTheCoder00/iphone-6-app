@@ -304,6 +304,15 @@ class ProactiveService:
             except Exception as e:
                 logger.error("Proactive service stopped with error: %s", e)
             self._task = None
+        # Detached pushes (morning briefing, rain check) may still be
+        # mid-flight; cancel them so shutdown never publishes after the event
+        # hub is torn down.
+        pending = list(self._pending_tasks)
+        self._pending_tasks.clear()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 proactive_service = ProactiveService()
