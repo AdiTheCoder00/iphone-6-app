@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-08-15T20:52:13.385Z",
+        "reason": "Inter comes from the Nocturne design system's theme.json (heading family), imported from the user's Claude Design project via DesignSync rather than chosen here. The palette has since moved to cyan but the typography is still Nocturne's. Covers the @import URL and the font-family stack in src/styles.css."
+      }
+    ]
+  }
+}

@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   Fact,
   Health,
+  MediaAction,
   PCStatus,
   Reminder,
   SmartDevices,
@@ -140,6 +141,12 @@ export const api = {
     request<{ messages: ChatMessage[] }>(s, '/conversation', {}, signal).then((r) => r.messages),
   clearConversation: (s: Settings) =>
     request<unknown>(s, '/conversation', { method: 'DELETE' }),
+  /* Transport only — the backend's Literal schema rejects anything else. */
+  media: (s: Settings, action: MediaAction) =>
+    request<{ action: MediaAction }>(s, '/pc/media', {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
   smartDevices: (s: Settings, signal?: AbortSignal) =>
     request<SmartDevices>(s, '/smart/devices', {}, signal),
   setSmartDevice: (s: Settings, entityId: string, turnOn: boolean) =>

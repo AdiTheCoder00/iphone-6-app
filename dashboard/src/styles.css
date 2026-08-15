@@ -1,40 +1,42 @@
-/* Tokens sourced from "Nocturne", a design system pulled in from Claude
-   Design (claude.ai/design) via DesignSync. This is a deliberate departure
-   from companion.html's cyan-on-near-black: the dashboard is an admin tool
-   for the same product, not required to share its exact palette. Values are
-   Nocturne's; the custom-property NAMES stay ours on purpose, so this is a
-   token swap rather than a rewrite of every rule that consumes them.
-   Where Nocturne's own system had no answer — status semantics (ok/warn/bad),
-   a sunken third surface tone below its two-tier bg/surface model — those are
-   this file's own extensions, tuned to sit comfortably in the same family. */
+/* Cyan-on-near-black, matching companion.html and the redesign mockups
+   ("Same palette as the shipped code — #4dd8e6 on #05070a"). The dashboard and
+   the phone are one product, so they share one accent.
+
+   Typography and structure still come from "Nocturne", the design system
+   pulled in from Claude Design (claude.ai/design) via DesignSync — its palette
+   is purple, so the colours below deliberately depart from it while Inter, the
+   token architecture and the outline-button treatment stay. The custom-property
+   NAMES have never changed, which is what keeps a re-theme a single edit here
+   rather than a sweep through every rule that consumes them. */
 
 /* @import MUST be the first rule in the file (only @charset may precede it) —
    a browser silently drops any @import that isn't, with no console warning in
-   most engines. Nocturne's own font source. */
+   most engines. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg: #161826;
-  --surface: #232532;
-  /* Nocturne's neutral-800 — a chip tone one step up from --surface, for
-     badges (.count, .tag) that need to read as sitting ON the card. */
-  --surface-2: #3f424d;
-  /* Nocturne's own divider formula: --color-divider = text at 16% alpha. */
-  --line: color-mix(in srgb, #e9e9ed 16%, transparent);
-  --text: #e9e9ed;
-  /* Nocturne's neutral-500. */
-  --muted: #9397ab;
-  --accent: #9184d9;
-  --accent-rgb: 145, 132, 217;
-  /* Nocturne defines no status roles (it's bg/surface/text/accent, one voice)
-     — these three are this app's own, tuned to the same restrained
-     saturation rather than lifted from a different palette. */
-  --ok: #7bcfa0;
-  --warn: #dcae6a;
-  --bad: #d98a8a;
-  --bad-rgb: 217, 138, 138;
-  /* Nocturne's --radius-md, used for cards and controls alike. */
-  --radius: 8px;
+  --bg: #05070a;
+  /* The panel tone the mockups use for every card. */
+  --surface: #0e151a;
+  /* A chip tone one step up from --surface, for badges (.count, .tag) that
+     need to read as sitting ON the card. */
+  --surface-2: #131c22;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #dfe9ee;
+  --muted: #7d8f9a;
+  --accent: #4dd8e6;
+  --accent-rgb: 77, 216, 230;
+  /* Status roles. The -rgb companions exist because these are also needed at
+     low alpha for pill and tag fills; previously those were written as raw
+     rgba() literals that drifted out of step with the tokens whenever the
+     palette moved. */
+  --ok: #5ce6b8;
+  --ok-rgb: 92, 230, 184;
+  --warn: #f0c26a;
+  --warn-rgb: 240, 194, 106;
+  --bad: #e88b8b;
+  --bad-rgb: 232, 139, 139;
+  --radius: 14px;
 }
 
 * { box-sizing: border-box; }
@@ -135,7 +137,7 @@ body {
 .stat__detail { color: var(--muted); font-size: 12px; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
-.dot--ok { background: var(--ok); box-shadow: 0 0 8px rgba(92, 230, 184, 0.5); }
+.dot--ok { background: var(--ok); box-shadow: 0 0 8px rgba(var(--ok-rgb), 0.5); }
 .dot--warn { background: var(--warn); }
 .dot--bad { background: var(--bad); }
 
@@ -299,7 +301,17 @@ body {
   background: var(--bg);
   overflow: hidden;
 }
-.meter__fill { height: 100%; border-radius: 3px; transition: width 400ms ease; }
+/* Animated with transform, not width: width is a layout property, so
+   transitioning it reflows the panel on every frame of every poll. scaleX from
+   a left origin is composited instead. The rounded ends come from the track's
+   own radius + overflow:hidden, since scaling a rounded box horizontally would
+   stretch its corners. */
+.meter__fill {
+  height: 100%;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 400ms ease;
+}
 .meter__fill--ok { background: var(--accent); }
 .meter__fill--warn { background: var(--warn); }
 .meter__fill--bad { background: var(--bad); }
@@ -320,9 +332,9 @@ body {
 
 /* --- event feed ---------------------------------------------------------- */
 .pill { padding: 3px 9px; border-radius: 9px; font-size: 11px; }
-.pill--ok { background: rgba(92, 230, 184, 0.14); color: var(--ok); }
-.pill--warn { background: rgba(240, 194, 106, 0.14); color: var(--warn); }
-.pill--bad { background: rgba(232, 139, 139, 0.14); color: var(--bad); }
+.pill--ok { background: rgba(var(--ok-rgb), 0.14); color: var(--ok); }
+.pill--warn { background: rgba(var(--warn-rgb), 0.14); color: var(--warn); }
+.pill--bad { background: rgba(var(--bad-rgb), 0.14); color: var(--bad); }
 
 .tag {
   display: inline-block;
@@ -333,13 +345,462 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
-.tag--reminder { background: rgba(92, 230, 184, 0.14); color: var(--ok); }
+.tag--reminder { background: rgba(var(--ok-rgb), 0.14); color: var(--ok); }
 .tag--wake { background: rgba(var(--accent-rgb), 0.14); color: var(--accent); }
-.tag--proactive { background: rgba(240, 194, 106, 0.14); color: var(--warn); }
+.tag--proactive { background: rgba(var(--warn-rgb), 0.14); color: var(--warn); }
+/* The 'timer' event type had no rule, so timer events fell back to the plain
+   grey .tag while every other type was colour-coded. */
+.tag--timer { background: rgba(var(--accent-rgb), 0.14); color: var(--accent); }
 
 .event__text { font-size: 13px; }
 
+/* ===========================================================================
+   BENTO — layout from mockup 1k.
+   Ported from the design project's styles.append.css, with its hard-coded
+   colours (#10171d, #070c10, #93a3ad, #c3d2da, #2f3f48 and the hero gradient
+   stops) replaced by the tokens above. That patch predates the Nocturne token
+   swap; pasting it verbatim would have reintroduced the cyan-era palette into
+   half the new surfaces.
+   ========================================================================= */
+.bento {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr 1fr;
+  gap: 16px;
+  /* Panels hug their content and the page grows, same as the old .grid. */
+  align-items: start;
+}
+.bento__hero  { grid-column: 1 / 3; grid-row: 1; }
+.bento__chat  { grid-column: 3; grid-row: 1 / 3; align-self: stretch; min-height: 420px; }
+.bento__left  { grid-column: 1; grid-row: 2; }
+.bento__right { grid-column: 2; grid-row: 2; }
+
+/* Reminders and memory stack in the one tile. Margin rather than flex gap —
+   the same iOS 12 constraint the top bar works around. */
+.bento__left > * + * { margin-top: 16px; }
+
+.bento__chat .panel { height: 100%; display: flex; flex-direction: column; }
+.bento__chat .panel__body { flex: 1 1 auto; min-height: 0; }
+
+/* Below three columns the bento collapses to a single stack rather than
+   half-width tiles, which at this density read as debris. */
+@media (max-width: 1100px) {
+  .bento { grid-template-columns: 1fr; }
+  .bento__hero, .bento__chat, .bento__left, .bento__right {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .bento__chat { min-height: 0; }
+}
+
+/* --- hero ---------------------------------------------------------------- */
+/* The one place the dashboard raises its voice: live numbers get the space.
+   A gradient, not a flat fill — a flat surface read as just another panel.
+   Mixed from the accent so it stays inside the Nocturne family instead of
+   hard-coding a second blue. */
+.hero {
+  display: flex;
+  align-items: center;
+  padding: 20px;
+  background: linear-gradient(
+    140deg,
+    color-mix(in srgb, var(--accent) 9%, var(--surface)),
+    var(--surface)
+  );
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.hero > * + * { margin-left: 24px; }
+.hero__main { flex: 1 1 auto; min-width: 0; }
+.hero__title {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hero__title--idle { color: var(--muted); }
+.hero__meta { margin-top: 5px; color: var(--muted); font-size: 13px; }
+.hero__error { margin-top: 10px; }
+
+.hero__transport { margin-top: 14px; display: flex; align-items: center; }
+.hero__transport > * + * { margin-left: 12px; }
+/* Named "scrub" to match the mockup's slot, but it carries the volume level:
+   /status/pc reports no track position, and a bar parked at a constant
+   fraction would be decoration posing as a reading. */
+.hero__scrub {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.hero__scrub i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 400ms ease;
+}
+.hero__time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.hero__meters { flex: 0 0 auto; width: 180px; }
+
+.btn--round {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Under one column the hero's two halves stack instead of squeezing the
+   meters against the title. */
+@media (max-width: 1100px) {
+  .hero { display: block; }
+  .hero > * + * { margin-left: 0; }
+  .hero__meters { width: auto; margin-top: 16px; }
+}
+
+/* --- setup prompt (3e) --------------------------------------------------- */
+/* Dashed, so it reads as a slot for something absent rather than a card
+   reporting a value. */
+.setup {
+  display: flex;
+  align-items: center;
+  padding: 26px;
+  background: var(--surface);
+  border: 1px dashed color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: var(--radius);
+}
+.setup > * + * { margin-left: 20px; }
+.setup__icon {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.setup__main { flex: 1 1 auto; min-width: 0; }
+.setup__title { font-size: 15px; font-weight: 500; }
+.setup__detail { margin-top: 4px; color: var(--muted); font-size: 13px; }
+
+/* --- activity ticker ----------------------------------------------------- */
+/* The feed as one line: on a dashboard you glance at, the last three events
+   are most of its value. The full panel stays below in the drawer. */
+.ticker {
+  display: flex;
+  align-items: center;
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.ticker > * + * { margin-left: 18px; }
+.ticker__label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ticker__events {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.ticker__events > * + * { margin-left: 18px; }
+.ticker__event { display: flex; align-items: center; white-space: nowrap; }
+.ticker__text { overflow: hidden; text-overflow: ellipsis; }
+.ticker__event time { margin-left: 8px; color: var(--muted); }
+
+/* --- full log drawer ----------------------------------------------------- */
+.feed-drawer { margin-top: 16px; }
+.feed-drawer > summary {
+  padding: 10px 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.feed-drawer > summary:hover { color: var(--text); }
+.feed-drawer > * + * { margin-top: 8px; }
+
+/* --- memory as chips ----------------------------------------------------- */
+/* Facts are short; a row each wasted a line. Chips keep the tile scannable.
+   Margins rather than flex gap, for the iOS 12 reason noted above. */
+.chips { display: flex; flex-wrap: wrap; margin: 0 -7px -7px 0; }
+.chip {
+  display: flex;
+  align-items: center;
+  margin: 0 7px 7px 0;
+  padding: 5px 6px 5px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  max-width: 100%;
+}
+.chip__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip__remove {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chip__remove:hover:not(:disabled) { background: rgba(var(--bad-rgb), 0.18); color: var(--bad); }
+.chip__remove:disabled { opacity: 0.4; cursor: default; }
+
+/* --- loading skeleton (1l) ----------------------------------------------- */
+.skeleton__block {
+  height: 52px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.skeleton__line {
+  height: 5px;
+  margin-top: 10px;
+  border-radius: 3px;
+  background: var(--bg);
+}
+/* Opacity only — a moving highlight would animate a background-position and
+   repaint the whole panel on a screen that is idle by definition. */
+.skeleton { animation: skeleton-breathe 1.6s ease-in-out infinite; }
+@keyframes skeleton-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* --- stale / reconnecting (3f) ------------------------------------------- */
+/* Dimmed as a block: every panel reads the same backend, so they all went
+   stale at the same instant. Pointer events stay on — the data is old but the
+   controls still work the moment the backend answers again. */
+.bento.is-stale, .panel.is-stale, .hero.is-stale { opacity: 0.55; }
+.panel__stale { color: var(--muted); font-size: 11px; }
+.statusbar--warn { color: var(--warn); border-color: rgba(var(--warn-rgb), 0.3); }
+.statusbar--down { border-color: rgba(var(--bad-rgb), 0.3); }
+.statusbar__action { margin-left: auto; height: 30px; padding: 0 12px; font-size: 12.5px; }
+.statusbar__detail { color: var(--muted); font-size: 12px; }
+.dot--pulse { animation: dot-pulse 1.4s ease-in-out infinite; }
+@keyframes dot-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+/* --- top bar actions ----------------------------------------------------- */
+.topbar__actions { display: flex; align-items: center; flex-wrap: wrap; }
+.topbar__actions > * + * { margin-left: 12px; }
+
+/* --- pairing dialog (1d / 3c) -------------------------------------------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+}
+.modal__panel {
+  width: 100%;
+  max-width: 380px;
+  /* The viewport can be shorter than the dialog on a laptop with the browser
+     chrome open; scroll inside rather than clipping the Done button. */
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.modal__title { margin: 0; font-size: 17px; font-weight: 600; }
+.modal__sub { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.modal__foot { margin-top: 20px; display: flex; justify-content: flex-end; }
+
+.pair__code {
+  margin: 20px auto 0;
+  padding: 12px;
+  width: -moz-fit-content;
+  width: fit-content;
+  border-radius: 12px;
+  /* White plate behind the symbol: scanners want dark modules on a light
+     field, so this one surface deliberately ignores the dark theme. */
+  background: #ffffff;
+}
+.pair__code canvas { display: block; }
+.pair__warn {
+  margin: 12px 0 0;
+  color: var(--warn);
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.pair__divider {
+  display: flex;
+  align-items: center;
+  margin: 18px 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.pair__divider::before,
+.pair__divider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--line);
+}
+.pair__divider span { padding: 0 12px; }
+
+.pair__field + .pair__field { margin-top: 12px; }
+.pair__label { display: block; color: var(--muted); font-size: 12px; }
+.pair__value {
+  display: block;
+  margin-top: 5px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.pair__actions { display: flex; margin-top: 8px; }
+.pair__actions > * + * { margin-left: 8px; }
+.pair__actions .btn { height: 30px; padding: 0 12px; font-size: 12.5px; }
+
+/* ===========================================================================
+   MOTION
+   Everything here animates transform and opacity only — both composited, so
+   nothing in this section triggers layout or paint.
+
+   Every entrance is a keyframe animation whose RESTING state is the visible
+   one, with the hidden state living only in the keyframes' `from`. That is
+   deliberate: the reduced-motion block at the end kills `animation` outright,
+   and an element whose base rule said `opacity: 0` would then stay invisible
+   forever. Written this way, killing the animation just means the element is
+   simply there.
+
+   Curves come from the Motion skill's CSS spring generator. `linear()` is
+   Safari 17.2+, so each spring is preceded by a plain-easing declaration: a
+   browser that cannot parse `linear()` discards that one declaration and keeps
+   the previous, rather than losing the transition entirely.
+   ========================================================================= */
+
+/* --- entrances ----------------------------------------------------------- */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* Panels settle in on first paint. 260ms and 6px — a dashboard you leave open
+   should not perform on arrival; this is just enough that the grid resolves
+   rather than snapping into place. */
+.panel, .hero, .setup, .ticker {
+  animation: rise-in 260ms cubic-bezier(0.2, 0, 0.2, 1) both;
+}
+/* A short stagger down the bento. Capped at four steps: past that the last
+   tile arrives late enough to read as lag rather than sequence.
+
+   The delays sit on the animated elements, not on the bento slots. Three of
+   those slots (__left, __right, __chat) are bare wrapper divs that never carry
+   the animation, so a delay on them would apply to nothing — and __hero is the
+   awkward one, being the hero element itself when there is a track and a
+   wrapper around a panel when there is not. Hence both forms below. */
+.bento__left > .panel:first-child  { animation-delay: 40ms; }
+.bento__left > .panel:nth-child(2) { animation-delay: 60ms; }
+.bento__right > .panel { animation-delay: 80ms; }
+.bento__chat > .panel  { animation-delay: 120ms; }
+.ticker { animation-delay: 140ms; }
+
+/* --- ticker events ------------------------------------------------------- */
+/* New events are prepended, so they enter from the left and push the older
+   ones along. Keyed on the event id in React, so only genuinely new entries
+   animate — a re-render of the same three does not restage them. */
+@keyframes ticker-in {
+  from { opacity: 0; transform: translateX(-10px); }
+}
+.ticker__event { animation: ticker-in 320ms cubic-bezier(0.2, 0, 0.2, 1) both; }
+
+/* --- stale / reconnect --------------------------------------------------- */
+/* The 3f dim fades rather than snapping: a hard cut reads as a repaint bug,
+   a fade reads as the data receding. Slow on the way out, quick on the way
+   back — recovery should feel immediate. */
+.bento { transition: opacity 400ms ease; }
+.bento:not(.is-stale) { transition-duration: 160ms; }
+
+.dot--pulse { will-change: opacity; }
+
+/* --- controls ------------------------------------------------------------ */
+/* The buttons had no transition at all, so every hover was a hard swap. */
+.btn, .chip__remove {
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+/* The transport buttons take a press: scale is the cheapest possible feedback
+   and the only one that reads on a 34px target. */
+.btn--round { transition: background-color 140ms ease, transform 140ms ease; }
+.btn--round:active:not(:disabled) { transform: scale(0.92); }
+
+/* --- pairing dialog ------------------------------------------------------ */
+@keyframes overlay-in { from { opacity: 0; } }
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+}
+.modal { animation: overlay-in 180ms ease both; }
+.modal__panel {
+  animation: panel-in 320ms cubic-bezier(0.2, 0, 0.2, 1) both;
+}
+@supports (animation-timing-function: linear(0, 1)) {
+  /* Spring, bounce 0.25, perceptual duration 0.32s. The 550ms includes the
+     settle — the overlay is still timed off 0.32s, not this. */
+  .modal__panel {
+    animation-duration: 550ms;
+    animation-timing-function: linear(
+      0, 0.107, 0.3241, 0.5499, 0.7371, 0.8713, 0.9563, 1.003, 1.0235, 1.0284,
+      1.0252, 1.019, 1.0126, 1.0073, 1.0036, 1.0012, 0.9999, 1
+    );
+  }
+}
+
+/* Exit. No overshoot on the way out — a dialog that springs while leaving
+   looks like it changed its mind. Duration must match EXIT_MS in
+   PairingDialog.tsx. */
+@keyframes overlay-out { to { opacity: 0; } }
+@keyframes panel-out {
+  to { opacity: 0; transform: translateY(4px) scale(0.98); }
+}
+.modal--closing { animation: overlay-out 180ms ease both; }
+.modal--closing .modal__panel {
+  animation: panel-out 180ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
 /* --- reduced motion ------------------------------------------------------ */
+/* Kills the lot, including every entrance above — which is exactly why none of
+   them park an element at opacity 0 outside their keyframes. */
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }

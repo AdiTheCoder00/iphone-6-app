@@ -6,6 +6,15 @@ interface Props {
   streamConnected: boolean;
   /* The reconnect backoff gave up: wrong token or dead host. */
   streamFailed: boolean;
+  /* Consecutive failed reconnects, for the "(attempt N)" readout. */
+  streamAttempts: number;
+  backendUrl: string;
+  /* True once we have held data and then lost the backend — mockup 3f's
+   * "dropped mid-session", as distinct from never having connected. */
+  reconnecting: boolean;
+  /* When the now-dimmed data was last read. */
+  lastSeen: Date | null;
+  onSettings: () => void;
 }
 
 function Dot({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) {
@@ -18,14 +27,54 @@ function Dot({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
   );
 }
 
-export function StatusBar({ health, error, streamConnected, streamFailed }: Props) {
+export function StatusBar({
+  health,
+  error,
+  streamConnected,
+  streamFailed,
+  streamAttempts,
+  backendUrl,
+  reconnecting,
+  lastSeen,
+  onSettings,
+}: Props) {
   /* role=status: the connection state is the one thing that can change while
    * the user is not looking, so announce it to screen readers. */
+
+  /* Mockup 3f — dropped mid-session. Amber, not red, and no Settings button:
+   * the config was demonstrably right a moment ago, so pointing the user at
+   * the settings would send them to change something that is not broken. The
+   * panels below keep their last-known data, dimmed. */
+  if (error && reconnecting) {
+    return (
+      <div className="statusbar statusbar--warn" role="status" aria-live="polite">
+        <span className="dot dot--warn dot--pulse" aria-hidden />
+        <span>
+          Connection dropped — reconnecting…
+          {streamAttempts > 0 ? ` (attempt ${streamAttempts})` : ''}
+        </span>
+        {lastSeen ? (
+          <span className="statusbar__detail">
+            showing data from{' '}
+            {lastSeen.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  /* Mockup 1l — never reached it at all. Red, names the address it tried, and
+   * offers the one thing that can fix it. */
   if (error) {
     return (
       <div className="statusbar statusbar--down" role="status" aria-live="polite">
         <span className="dot dot--bad" aria-hidden />
-        <span>{error}</span>
+        <span>
+          Can’t reach {backendUrl} — {error}
+        </span>
+        <button type="button" className="btn statusbar__action" onClick={onSettings}>
+          Settings
+        </button>
       </div>
     );
   }

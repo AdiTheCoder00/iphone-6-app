@@ -5,32 +5,68 @@ interface PanelProps {
   /* Right-aligned slot for a count, a status dot, an action button. */
   aside?: ReactNode;
   loading?: boolean;
+  /* Mockup 1l: render shaped placeholder bars instead of the word "Loading…".
+   * Only for a first load — a background refresh must never replace a panel
+   * that already has good data with skeletons. */
+  skeleton?: boolean;
+  skeletonLines?: number;
   error?: string | null;
   /* Shown when there is no error and nothing to list. Distinguishing this
    * from an error state matters: "nothing scheduled" and "couldn't reach the
    * backend" look identical as an empty list, and only one is fine. */
   empty?: boolean;
   emptyText?: string;
+  /* Mockup 3f: the backend dropped but this panel still holds its last good
+   * data. Dimmed and labelled with when it was read, so a stale number is
+   * never mistaken for a live one. */
+  stale?: boolean;
+  staleLabel?: string;
   children?: ReactNode;
+}
+
+function Skeleton({ lines }: { lines: number }) {
+  return (
+    <div className="skeleton" aria-hidden>
+      <div className="skeleton__block" />
+      {Array.from({ length: Math.max(0, lines) }, (_, i) => (
+        /* Descending widths so it reads as text, not as a stack of bars. */
+        <div key={i} className="skeleton__line" style={{ width: `${70 - i * 12}%` }} />
+      ))}
+    </div>
+  );
 }
 
 export function Panel({
   title,
   aside,
   loading,
+  skeleton,
+  skeletonLines = 2,
   error,
   empty,
   emptyText = 'Nothing here.',
+  stale,
+  staleLabel,
   children,
 }: PanelProps) {
   return (
-    <section className="panel">
+    <section className={`panel${stale ? ' is-stale' : ''}`}>
       <header className="panel__head">
         <h2 className="panel__title">{title}</h2>
-        {aside ? <div className="panel__aside">{aside}</div> : null}
+        {/* When stale, the last-seen time replaces the usual aside: a live
+            count next to dimmed data would be claiming freshness it lost. */}
+        {stale && staleLabel ? (
+          <div className="panel__aside">
+            <span className="panel__stale">{staleLabel}</span>
+          </div>
+        ) : aside ? (
+          <div className="panel__aside">{aside}</div>
+        ) : null}
       </header>
       <div className="panel__body">
-        {loading ? (
+        {skeleton ? (
+          <Skeleton lines={skeletonLines} />
+        ) : loading ? (
           <p className="muted">Loading…</p>
         ) : error ? (
           <p className="error">{error}</p>

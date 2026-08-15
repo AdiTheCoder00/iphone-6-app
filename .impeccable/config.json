@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-08-15T20:38:47.598Z",
+        "reason": "Nocturne design system specifies Inter as its heading family (theme.json); imported from the user's Claude Design project via DesignSync rather than chosen here. Covers both the @import URL (styles.css L14) and the font-family stack (L48)."
+      }
+    ]
+  }
+}

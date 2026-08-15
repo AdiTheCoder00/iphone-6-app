@@ -1,0 +1,50 @@
+import type { EventLogEntry } from '../hooks';
+
+/* Same labels as EventFeed — keep the two in step. */
+const LABELS: Record<string, string> = {
+  reminder: 'Reminder fired',
+  timer: 'Timer done',
+  wake: 'Wake word',
+  proactive: 'Spoke first',
+};
+
+interface Props {
+  events: EventLogEntry[];
+  connected: boolean;
+  failed: boolean;
+}
+
+/* Mockup 1k: the last three events on one line. The full EventFeed panel still
+ * exists below — this is what the dashboard shows when it is being glanced at
+ * rather than read. */
+export function ActivityTicker({ events, connected, failed }: Props) {
+  return (
+    <section className="ticker">
+      <span className="ticker__label">Live activity</span>
+      <span className={`pill ${connected ? 'pill--ok' : failed ? 'pill--bad' : 'pill--warn'}`}>
+        {connected ? 'live' : failed ? 'offline' : 'reconnecting'}
+      </span>
+      {/* aria-live on the list, not the section: announcing the "live/offline"
+          pill on every reconnect would talk over the events themselves. */}
+      <div className="ticker__events" aria-live="polite">
+        {events.length === 0 ? (
+          <span className="muted">Nothing yet.</span>
+        ) : (
+          events.slice(0, 3).map((e) => (
+            <span key={e.id} className="ticker__event">
+              <span className={`tag tag--${e.type}`}>{LABELS[e.type] ?? e.type}</span>
+              {e.text ? <span className="ticker__text">{e.text}</span> : null}
+              <time dateTime={e.at.toISOString()}>
+                {e.at.toLocaleTimeString(undefined, {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  second: '2-digit',
+                })}
+              </time>
+            </span>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}

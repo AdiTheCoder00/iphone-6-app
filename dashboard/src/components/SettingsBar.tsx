@@ -4,24 +4,28 @@ import type { Settings } from '../api';
 interface Props {
   settings: Settings;
   onSave: (next: Settings) => void;
+  /* Controlled by App so the offline banner's Settings button can open this —
+   * the thing that fixes a wrong URL or token is up here, and a button that
+   * only scrolls you toward it is not much help. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
-export function SettingsBar({ settings, onSave }: Props) {
-  const [open, setOpen] = useState(!settings.token);
+export function SettingsBar({ settings, onSave, open, onOpenChange }: Props) {
   const [backendUrl, setBackendUrl] = useState(settings.backendUrl);
   const [token, setToken] = useState(settings.token);
 
   const save = (e: React.FormEvent) => {
     e.preventDefault();
     onSave({ backendUrl: backendUrl.trim(), token: token.trim() });
-    setOpen(false);
+    onOpenChange(false);
   };
 
   if (!open) {
     return (
       <div className="settingsbar settingsbar--collapsed">
         <span className="muted">{settings.backendUrl}</span>
-        <button type="button" className="btn btn--quiet" onClick={() => setOpen(true)}>
+        <button type="button" className="btn btn--quiet" onClick={() => onOpenChange(true)}>
           Settings
         </button>
       </div>

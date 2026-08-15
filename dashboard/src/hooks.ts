@@ -130,6 +130,10 @@ export function useEvents(settings: Settings, limit = 50) {
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [failed, setFailed] = useState(false);
+  /* Mirrors the internal `failures` counter as state so the UI can say which
+   * attempt it is on. Kept as a separate value rather than derived from
+   * `failed`, which only flips once the loop has given up. */
+  const [attempts, setAttempts] = useState(0);
   const nextId = useRef(0);
 
   useEffect(() => {
@@ -145,12 +149,14 @@ export function useEvents(settings: Settings, limit = 50) {
     setEvents([]);
     setConnected(false);
     setFailed(false);
+    setAttempts(0);
 
     const scheduleRetry = () => {
       /* retryPending stops a second onerror from scheduling a second
        * EventSource before the first retry fires. */
       if (closed || retryPending) return;
       failures += 1;
+      setAttempts(failures);
       if (failures >= SSE_MAX_FAILURES) {
         setConnected(false);
         setFailed(true);
@@ -194,6 +200,7 @@ export function useEvents(settings: Settings, limit = 50) {
           retry = null;
         }
         setFailed(false);
+        setAttempts(0);
         setConnected(true);
       };
 
@@ -246,6 +253,7 @@ export function useEvents(settings: Settings, limit = 50) {
         retryPending = false;
         delay = SSE_RETRY_MS;
         failures = 0;
+        setAttempts(0);
         connect();
       }
     };
@@ -260,5 +268,5 @@ export function useEvents(settings: Settings, limit = 50) {
     };
   }, [settings, limit]);
 
-  return { events, connected, failed };
+  return { events, connected, failed, attempts };
 }

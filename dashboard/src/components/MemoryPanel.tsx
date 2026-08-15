@@ -11,6 +11,10 @@ interface Props {
   onChanged: () => void;
 }
 
+/* Mockup 1k renders facts as chips rather than rows: they are short phrases,
+ * and a full row each wasted a line apiece in a tile that sits under the
+ * reminders. The delete stays inside the chip — memory you cannot delete is
+ * memory you cannot trust. */
 export function MemoryPanel({ facts, error, loading, settings, onChanged }: Props) {
   const [busy, setBusy] = useState<number | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -35,32 +39,30 @@ export function MemoryPanel({ facts, error, loading, settings, onChanged }: Prop
       title="Memory"
       aside={facts ? <span className="count">{facts.length}</span> : null}
       loading={loading}
+      skeleton={loading}
+      skeletonLines={2}
       error={error}
       empty={!!facts && facts.length === 0}
       emptyText="Nothing remembered yet."
     >
       {failed ? <p className="error">{failed}</p> : null}
-      <ul className="rows">
+      <div className="chips">
         {facts?.map((f) => (
-          <li key={f.id} className="row">
-            <div className="row__main">
-              <div className="row__text">{f.text}</div>
-            </div>
-            <div className="row__actions">
-              <button
-                type="button"
-                className="btn btn--danger"
-                disabled={busy === f.id}
-                onClick={() => remove(f.id)}
-                title="Forget this"
-                aria-label="Forget this"
-              >
-                ✕
-              </button>
-            </div>
-          </li>
+          <span key={f.id} className="chip">
+            <span className="chip__text">{f.text}</span>
+            <button
+              type="button"
+              className="chip__remove"
+              disabled={busy === f.id}
+              onClick={() => remove(f.id)}
+              title={`Forget "${f.text}"`}
+              aria-label={`Forget "${f.text}"`}
+            >
+              ✕
+            </button>
+          </span>
         ))}
-      </ul>
+      </div>
     </Panel>
   );
 }

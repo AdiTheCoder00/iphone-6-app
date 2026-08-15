@@ -32,6 +32,10 @@ export interface PCStatus {
   battery_plugged: boolean | null;
 }
 
+/* Mirrors MediaActionRequest's Literal. Transport actions only: the dashboard
+ * deliberately exposes no lock/sleep/shutdown control. */
+export type MediaAction = 'play_pause' | 'next' | 'previous';
+
 export interface Reminder {
   id: number;
   text: string;

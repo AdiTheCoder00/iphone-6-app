@@ -13,6 +13,14 @@ Thumbs.db
 .backend-scheme
 .frontend-port
 
+# Tooling config: the shared files (.claude/launch.json, .impeccable/config.json)
+# describe the project and are committed. The *.local.json ones hold this
+# machine's own permission grants and consent flags, and the hook caches are
+# regenerated on demand — none of that belongs to anyone else.
+.claude/settings.local.json
+**/.impeccable/config.local.json
+**/.impeccable/hook.cache.json
+
 # Dashboard (React/Vite): dependencies and build output are both reproducible
 # from package.json + `npm run build`, so neither belongs in the repo.
 node_modules/
