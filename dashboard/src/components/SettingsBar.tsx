@@ -35,7 +35,7 @@ export function SettingsBar({ settings, onSave }: Props) {
         <input
           value={backendUrl}
           onChange={(e) => setBackendUrl(e.target.value)}
-          placeholder="http://localhost:8000"
+          placeholder="https://<computer-LAN-IP>:8000"
           autoComplete="off"
           spellCheck={false}
         />

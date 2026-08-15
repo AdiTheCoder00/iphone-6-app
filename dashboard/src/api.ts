@@ -21,8 +21,20 @@ export interface Settings {
   token: string;
 }
 
+/* The dashboard is normally opened on the phone from the same machine that
+ * runs the backend — https://<LAN-IP>:8443/dashboard/ — so derive the
+ * backend URL from the page origin: same scheme and host, port 8000. That
+ * gets the scheme right automatically (the backend is HTTPS when certs
+ * exist) and never points at the phone's own localhost. */
+function defaultBackendUrl(): string {
+  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+  return 'http://localhost:8000';
+}
+
 const DEFAULTS: Settings = {
-  backendUrl: 'http://localhost:8000',
+  backendUrl: defaultBackendUrl(),
   token: '',
 };
 
@@ -65,8 +77,11 @@ function base(settings: Settings): string {
 }
 
 /* fetch() has no timeout of its own; a half-open connection would otherwise
- * hold a poll in flight until the next tick's abort. Race every request
- * against this, matching the companion.html wrapper. */
+ * hold a poll in flight forever and the body read would hang even after the
+ * headers arrived. The internal controller aborts the request on timeout,
+ * and the same timer also bounds the json() read (iOS 12.0/12.1 have no
+ * AbortController — there the timeout rejects and the request is left to
+ * die on its own, exactly like companion.html). */
 const REQUEST_TIMEOUT_MS = 15_000;
 
 async function request<T>(
@@ -79,19 +94,25 @@ async function request<T>(
   if (settings.token) headers['X-Companion-Token'] = settings.token;
   if (init.body) headers['Content-Type'] = 'application/json';
 
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('Request timed out')), REQUEST_TIMEOUT_MS);
+    timer = setTimeout(() => {
+      if (controller) controller.abort();
+      reject(new Error('Request timed out'));
+    }, REQUEST_TIMEOUT_MS);
   });
   try {
     const response = await Promise.race([
-      fetch(base(settings) + path, { ...init, headers, signal }),
+      fetch(base(settings) + path, { ...init, headers, signal: signal ?? controller?.signal }),
       timeout,
     ]);
     if (response.status === 401) throw new UnauthorizedError();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+    /* The body read is not covered by the caller's abort (which only cancels
+     * the response phase), so race it against the same timeout. */
+    return (await Promise.race([response.json(), timeout])) as T;
   } finally {
     clearTimeout(timer);
   }

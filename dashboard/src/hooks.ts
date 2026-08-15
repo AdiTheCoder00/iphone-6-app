@@ -31,9 +31,13 @@ export function usePoll<T>(
   const [loading, setLoading] = useState(true);
 
   /* Held in a ref so the effect below does not re-subscribe on every render
-   * just because an inline arrow function is a new identity each time. */
+   * just because an inline arrow function is a new identity each time. The
+   * ref is refreshed in an effect (not during render) so React 18's
+   * concurrent renderer never reads a half-updated value. */
   const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  });
   const abortRef = useRef<AbortController | null>(null);
   /* Generation counter for superseded runs: iOS 12.0/12.1 has no
    * AbortController, so an old request cannot be killed — it must instead be

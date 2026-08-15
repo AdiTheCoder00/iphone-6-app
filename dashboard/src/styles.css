@@ -1,20 +1,40 @@
-/* Deliberately shares the companion's palette — same cyan on near-black — so
-   the dashboard reads as the same product rather than a separate admin tool.
-   Desktop-first, unlike companion.html which is pinned to 375x667. */
+/* Tokens sourced from "Nocturne", a design system pulled in from Claude
+   Design (claude.ai/design) via DesignSync. This is a deliberate departure
+   from companion.html's cyan-on-near-black: the dashboard is an admin tool
+   for the same product, not required to share its exact palette. Values are
+   Nocturne's; the custom-property NAMES stay ours on purpose, so this is a
+   token swap rather than a rewrite of every rule that consumes them.
+   Where Nocturne's own system had no answer — status semantics (ok/warn/bad),
+   a sunken third surface tone below its two-tier bg/surface model — those are
+   this file's own extensions, tuned to sit comfortably in the same family. */
+
+/* @import MUST be the first rule in the file (only @charset may precede it) —
+   a browser silently drops any @import that isn't, with no console warning in
+   most engines. Nocturne's own font source. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg: #05070a;
-  --surface: #0e151a;
-  --surface-2: #131c22;
-  --line: rgba(255, 255, 255, 0.08);
-  --text: #dfe9ee;
-  --muted: #7d8f9a;
-  --accent: #4dd8e6;
-  --accent-rgb: 77, 216, 230;
-  --ok: #5ce6b8;
-  --warn: #f0c26a;
-  --bad: #e88b8b;
-  --radius: 14px;
+  --bg: #161826;
+  --surface: #232532;
+  /* Nocturne's neutral-800 — a chip tone one step up from --surface, for
+     badges (.count, .tag) that need to read as sitting ON the card. */
+  --surface-2: #3f424d;
+  /* Nocturne's own divider formula: --color-divider = text at 16% alpha. */
+  --line: color-mix(in srgb, #e9e9ed 16%, transparent);
+  --text: #e9e9ed;
+  /* Nocturne's neutral-500. */
+  --muted: #9397ab;
+  --accent: #9184d9;
+  --accent-rgb: 145, 132, 217;
+  /* Nocturne defines no status roles (it's bg/surface/text/accent, one voice)
+     — these three are this app's own, tuned to the same restrained
+     saturation rather than lifted from a different palette. */
+  --ok: #7bcfa0;
+  --warn: #dcae6a;
+  --bad: #d98a8a;
+  --bad-rgb: 217, 138, 138;
+  /* Nocturne's --radius-md, used for cards and controls alike. */
+  --radius: 8px;
 }
 
 * { box-sizing: border-box; }
@@ -25,7 +45,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -80,16 +100,19 @@ body {
 .field > * + * { margin-top: 5px; }
 .field input {
   min-width: 230px;
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 9px;
+  height: 40px;
+  padding: 0 12px;
+  /* Nocturne's .input sits on --surface itself (its system has no third,
+     sunken tone) — matched here rather than inventing one. */
+  border-radius: var(--radius);
   border: 1px solid var(--line);
-  background: #070c10;
+  background: var(--surface);
   color: var(--text);
   font-size: 13px;
   outline: none;
 }
-.field input:focus { border-color: rgba(var(--accent-rgb), 0.55); }
+.field input:hover { border-color: color-mix(in srgb, var(--text) 45%, transparent); }
+.field input:focus { border-color: var(--accent); }
 
 /* --- status strip -------------------------------------------------------- */
 .statusbar {
@@ -144,10 +167,12 @@ body {
 .panel__title {
   margin: 0;
   font-size: 11px;
-  font-weight: 700;
+  /* Nocturne's heading weight is 500; 700 read as too heavy once the family
+     moved from a system stack to Inter, so this settles between the two. */
+  font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #93a3ad;
+  color: var(--muted);
 }
 .panel__aside { display: flex; align-items: center; }
 .panel__aside > * + * { margin-left: 8px; }
@@ -173,9 +198,11 @@ body {
   display: flex;
   align-items: center;
   padding: 10px 12px;
-  background: #070c10;
+  /* Sits at page-floor level against the lighter --surface panel around it —
+     Nocturne's own two-tier bg/surface model, not a third invented tone. */
+  background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 .row > * + * { margin-left: 12px; }
 .row__main { flex: 1 1 auto; min-width: 0; }
@@ -184,41 +211,49 @@ body {
 .row__actions { display: flex; align-items: center; flex: 0 0 auto; }
 .row__actions > * + * { margin-left: 6px; }
 
-/* --- buttons ------------------------------------------------------------- */
+/* --- buttons ---------------------------------------------------------------
+   Nocturne's primary is a true outline: transparent by default, an accent
+   border and text, filling in only on hover/active. Ours previously started
+   pre-tinted; this matches Nocturne's .btn-primary exactly (12%/22% tint on
+   hover/active). */
 .btn {
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid rgba(var(--accent-rgb), 0.4);
-  border-radius: 8px;
-  background: rgba(var(--accent-rgb), 0.12);
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: transparent;
   color: var(--accent);
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
 }
-.btn:hover:not(:disabled) { background: rgba(var(--accent-rgb), 0.2); }
+.btn:hover:not(:disabled) { background: rgba(var(--accent-rgb), 0.12); }
+.btn:active:not(:disabled) { background: rgba(var(--accent-rgb), 0.22); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 
+/* Nocturne's .btn-secondary. */
 .btn--quiet {
   border-color: var(--line);
   background: transparent;
   color: var(--muted);
 }
-.btn--quiet:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+.btn--quiet:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.btn--quiet:active:not(:disabled) { background: color-mix(in srgb, var(--text) 14%, transparent); }
 
-.btn--danger { border-color: rgba(232, 139, 139, 0.35); background: transparent; color: #b9848a; }
-.btn--danger:hover:not(:disabled) { background: rgba(232, 139, 139, 0.14); color: var(--bad); }
+.btn--danger { border-color: rgba(var(--bad-rgb), 0.5); background: transparent; color: var(--bad); }
+.btn--danger:hover:not(:disabled) { background: rgba(var(--bad-rgb), 0.14); }
+.btn--danger:active:not(:disabled) { background: rgba(var(--bad-rgb), 0.24); }
 
 .confirm { display: flex; }
 .confirm > * + * { margin-left: 6px; }
 
 /* --- toggle switch ------------------------------------------------------- */
 .toggle {
-  width: 42px;
-  height: 24px;
-  padding: 2px;
-  border-radius: 12px;
+  width: 48px;
+  height: 30px;
+  padding: 3px;
+  border-radius: 15px;
   border: 1px solid var(--line);
-  background: #10171d;
+  background: var(--bg);
   cursor: pointer;
   display: flex;
   transition: background 160ms ease, border-color 160ms ease;
@@ -226,21 +261,21 @@ body {
 .toggle--on { background: rgba(var(--accent-rgb), 0.28); border-color: rgba(var(--accent-rgb), 0.55); }
 .toggle:disabled { opacity: 0.5; cursor: default; }
 .toggle__knob {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: #6d7d86;
+  background: var(--muted);
   transition: transform 160ms ease, background 160ms ease;
 }
-.toggle--on .toggle__knob { transform: translateX(18px); background: var(--accent); }
+.toggle--on .toggle__knob { transform: translateX(20px); background: var(--accent); }
 
 /* --- PC panel ------------------------------------------------------------ */
 .nowplaying {
   padding: 11px 12px;
   margin-bottom: 12px;
-  background: #070c10;
+  background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 .nowplaying__title { font-size: 14px; font-weight: 500; }
 .nowplaying__meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
@@ -261,7 +296,7 @@ body {
   margin-top: 5px;
   height: 5px;
   border-radius: 3px;
-  background: #10171d;
+  background: var(--bg);
   overflow: hidden;
 }
 .meter__fill { height: 100%; border-radius: 3px; transition: width 400ms ease; }
@@ -281,7 +316,7 @@ body {
   overflow-wrap: anywhere;
 }
 .bubble--user { align-self: flex-end; background: rgba(var(--accent-rgb), 0.14); border: 1px solid rgba(var(--accent-rgb), 0.24); }
-.bubble--assistant { align-self: flex-start; background: #070c10; border: 1px solid var(--line); }
+.bubble--assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); }
 
 /* --- event feed ---------------------------------------------------------- */
 .pill { padding: 3px 9px; border-radius: 9px; font-size: 11px; }

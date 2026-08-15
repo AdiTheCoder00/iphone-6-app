@@ -68,6 +68,12 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   if (new URL(request.url).origin !== self.location.origin) return;
 
+  /* SSE streams must pass straight through untouched: cloning a live body
+     (below) would consume it and break the connection. EventSource sends
+     this Accept header, so it is the reliable tell. */
+  const accept = (request.headers.get('accept') || '').toLowerCase();
+  if (accept.includes('text/event-stream')) return;
+
   /* Network first: an edited companion.html must win over the cached copy,
      otherwise every change would need a manual cache bust. The cache is the
      fallback, not the source of truth. */

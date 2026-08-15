@@ -19,9 +19,11 @@ function Dot({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
 }
 
 export function StatusBar({ health, error, streamConnected, streamFailed }: Props) {
+  /* role=status: the connection state is the one thing that can change while
+   * the user is not looking, so announce it to screen readers. */
   if (error) {
     return (
-      <div className="statusbar statusbar--down">
+      <div className="statusbar statusbar--down" role="status" aria-live="polite">
         <span className="dot dot--bad" aria-hidden />
         <span>{error}</span>
       </div>
@@ -29,7 +31,7 @@ export function StatusBar({ health, error, streamConnected, streamFailed }: Prop
   }
   if (!health) {
     return (
-      <div className="statusbar">
+      <div className="statusbar" role="status" aria-live="polite">
         <span className="dot dot--warn" aria-hidden />
         <span>Connecting…</span>
       </div>
@@ -48,7 +50,7 @@ export function StatusBar({ health, error, streamConnected, streamFailed }: Prop
         : health.model;
 
   return (
-    <div className="statusbar">
+    <div className="statusbar" role="status" aria-live="polite">
       <Dot ok={health.status === 'ok'} label="Backend" />
       <Dot ok={health.ollama_connected && modelOk} label="Model" detail={modelDetail} />
       <Dot ok={health.tts_enabled} label="Voice" detail={health.tts_enabled ? 'on' : 'off'} />

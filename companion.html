@@ -2215,7 +2215,9 @@ window.CompanionChat = (function () {
     try {
       sse = new EventSource(window.CompanionConfig.eventsUrl());
     } catch (e) {
-      console.error('[Companion] could not open event stream:', e);
+      /* e is a SyntaxError whose message contains the full URL — including
+         the ?token= query — so log only its name. */
+      console.error('[Companion] could not open event stream:', e && e.name);
       scheduleReconnect();
       return;
     }
@@ -2478,6 +2480,10 @@ window.CompanionGlance = (function () {
   'use strict';
 
   var HEALTH_RETRY_MS = 5000;
+  /* The healthy path re-arms at this slower pace: the backend must not go
+     unnoticed for the rest of the session just because it was up once at
+     boot — but a live face does not need a health probe every 5s either. */
+  var HEALTH_IDLE_RETRY_MS = 15000;
   var HEALTH_REQUEST_TIMEOUT_MS = 5000;
   var LONG_PRESS_MS = 600;
   var LONG_PRESS_SLOP_PX = 12;
@@ -2795,14 +2801,32 @@ window.CompanionGlance = (function () {
       var res = await window.CompanionConfig.request('/conversation');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
-      var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'companion-conversation.json';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      var text = JSON.stringify(data, null, 2);
+      if ('download' in document.createElement('a')) {
+        var blob = new Blob([text], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'companion-conversation.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      } else {
+        /* iOS 12 Safari ignores the download attribute and would try to
+           navigate to the blob: URL. The clipboard still gets the data off
+           the device. */
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        var copied = false;
+        try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+        ta.remove();
+        window.CompanionChat.showBubble(
+          copied ? 'conversation copied to clipboard' : 'could not copy the conversation', !copied
+        );
+      }
     } catch (e) {
       window.CompanionChat.showBubble('could not download the conversation', true);
     }
@@ -2942,12 +2966,13 @@ window.CompanionGlance = (function () {
      sit there looking content. Retries every 5s until it answers. */
   var healthTimer = null;
   var healthy = null;                          // null = not yet determined
+  var healthInFlight = false;
 
-  function armHealthRetry() {
+  function armHealthRetry(ms) {
     /* Re-arm only in the foreground: a backgrounded tab must not probe the
-       backend every 5s for as long as it stays hidden. The visibilitychange
-       handler re-checks the moment it comes back. */
-    if (!document.hidden) healthTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
+       backend every few seconds for as long as it stays hidden. The
+       visibilitychange handler re-checks the moment it comes back. */
+    if (!document.hidden) healthTimer = setTimeout(checkHealth, ms || HEALTH_RETRY_MS);
   }
 
   function showRetry(visible, text, action) {
@@ -2958,9 +2983,11 @@ window.CompanionGlance = (function () {
     connectBackendBtn.textContent = retryAction === 'retry' ? 'Retry' : 'Connect';
   }
 
-  async function checkHealth() {
+async function checkHealth() {
     if (healthTimer !== null) { clearTimeout(healthTimer); healthTimer = null; }
     if (document.hidden) return;               // no probes while backgrounded
+    if (healthInFlight) return;                // visibilitychange raced a timer
+    healthInFlight = true;
     var requestBackend = window.CompanionConfig.backendUrl();
     var health = null;
     try {
@@ -2970,6 +2997,8 @@ window.CompanionGlance = (function () {
       if (res.ok) health = await res.json();
     } catch (e) {
       health = null;
+    } finally {
+      healthInFlight = false;
     }
 
     /* A delayed health result for the old URL must not affect a new target. */
@@ -2982,6 +3011,9 @@ window.CompanionGlance = (function () {
 window.Companion.settle();
       }
       healthy = true;
+      /* Keep watching: a backend that dies later must surface, not be
+         forgotten because it was healthy once at boot. */
+      armHealthRetry(HEALTH_IDLE_RETRY_MS);
       return;
     }
 
