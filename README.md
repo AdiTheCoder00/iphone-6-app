@@ -43,6 +43,11 @@ To build the dashboard (needed once, or after editing `dashboard/src/`):
 npm run build   # in dashboard/
 ```
 
+Then "open dashboard" opens it on the phone: the dashboard URL lives in
+`backend/.env` as `PC_URL_SHORTCUTS.dashboard` (the shipped default is
+`http://localhost:8080/dashboard/` — edit it to the computer's LAN IP if the
+phone is on a different network).
+
 The first use of voice transcription and TTS downloads their local model files;
 the initial response may therefore take longer than later ones.
 

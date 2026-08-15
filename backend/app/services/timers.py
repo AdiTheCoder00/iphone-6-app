@@ -95,8 +95,12 @@ class TimerService:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                # Cancellation is expected; anything else is a real defect and
+                # must be visible rather than swallowed.
+                logger.error("Timer service stopped with error: %s", e)
             self._task = None
 
 

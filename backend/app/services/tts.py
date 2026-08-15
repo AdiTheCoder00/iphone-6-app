@@ -78,6 +78,10 @@ def _download(url: str, dest: Path) -> None:
             logger.warning(
                 "TTS download attempt %d of %s failed: %s", attempt, dest.name, e
             )
+            if attempt == 1:
+                # Back off a moment between attempts: on a flaky network two
+                # immediate tries fail in the same second for nothing.
+                time.sleep(2.0)
     if tmp.exists():
         tmp.unlink()
     raise TTSError(f"could not download {dest.name}")

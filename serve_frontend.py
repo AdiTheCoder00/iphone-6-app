@@ -23,6 +23,7 @@ import argparse
 import mimetypes
 import ssl
 import sys
+import threading
 import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -58,6 +59,51 @@ CACHE_NO = {"/companion.html", "/sw.js", "/manifest.json"}
 # /dashboard/ — a whole directory of build output, so it gets a branch of its
 # own below rather than entries in the exact-path whitelist.
 DASHBOARD_DIR = ROOT / "dashboard" / "dist"
+
+# The dashboard is a React app with inline-free, hash-named assets; a
+# conservative policy fits it exactly. Deliberately NOT applied to the PWA
+# shell, whose companion.html carries an inline script/style.
+DASHBOARD_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "connect-src *; "
+    "media-src 'self' blob:; "
+    "frame-ancestors 'none'"
+)
+
+# ThreadingHTTPServer spawns a thread per connection with no cap; under the
+# "anyone on the WiFi" threat model a burst of slow connections could exhaust
+# memory. This semaphore throttles concurrent handlers instead.
+MAX_HANDLER_THREADS = 32
+
+
+class _ThrottledServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a cap on concurrent handlers.
+
+    The stock server spawns a thread per connection with no limit; under the
+    "anyone on the WiFi" threat model a burst of slow connections could
+    exhaust memory. The semaphore is taken before a handler thread is spawned
+    and released when that handler finishes, so only slow/stuck connections
+    accumulate past the cap.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(MAX_HANDLER_THREADS)
+
+    def process_request(self, request, client_address):
+        self._slots.acquire()
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 class CompanionHandler(SimpleHTTPRequestHandler):
@@ -115,6 +161,8 @@ class CompanionHandler(SimpleHTTPRequestHandler):
         if not path.startswith("/dashboard/"):
             return False
 
+        self._dashboard_csp = True
+
         rel = path[len("/dashboard/"):]
         # On Windows both / and \ separate paths, and a drive-qualified
         # segment (C:/...) resolves absolutely; either would escape the dist
@@ -153,6 +201,11 @@ class CompanionHandler(SimpleHTTPRequestHandler):
             super().do_HEAD()
 
     def end_headers(self):
+        # MIME sniffing could turn a served-but-unintended file into an
+        # executable page; the whitelist's whole point is control of content.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if getattr(self, "_dashboard_csp", False):
+            self.send_header("Content-Security-Policy", DASHBOARD_CSP)
         path = urllib.parse.urlparse(self.path).path
         if path in CACHE_NO:
             self.send_header("Cache-Control", "no-cache")
@@ -176,7 +229,7 @@ def serve(port: int, cert_dir: Path | None) -> None:
                 "chain first (see README, 'Local HTTPS certs')"
             )
 
-    server = ThreadingHTTPServer(("0.0.0.0", port), CompanionHandler)
+    server = _ThrottledServer(("0.0.0.0", port), CompanionHandler)
 
     if cert_dir is not None:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

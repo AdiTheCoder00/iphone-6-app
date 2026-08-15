@@ -206,13 +206,24 @@ app.add_middleware(
 )
 
 
+async def _health_probe(coro) -> bool:
+    """Run one health probe; a raised probe degrades to False."""
+    try:
+        return bool(await coro)
+    except Exception as e:
+        logger.warning("Health probe failed: %s", e)
+        return False
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     # Probes run in parallel: the frontend aborts after 5s, and sequential
     # probes (Ollama 3s + HA 3s) could exceed that on a wedged dependency.
+    # One probe raising must not take the whole health check down — a health
+    # endpoint that 500s is useless — so each failure degrades to False.
     ollama_ok, ha_ok = await asyncio.gather(
-        companion_service.is_available(),
-        smart_home.is_available(),
+        _health_probe(companion_service.is_available()),
+        _health_probe(smart_home.is_available()),
     )
     return HealthResponse(
         status="ok",

@@ -9,4 +9,5 @@ from pathlib import Path
 
 from serve_frontend import serve
 
-serve(port=8443, cert_dir=Path(__file__).resolve().parent / "certs")
+if __name__ == "__main__":
+    serve(port=8443, cert_dir=Path(__file__).resolve().parent / "certs")

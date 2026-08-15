@@ -539,6 +539,7 @@ html, body {
 }
 .composer__tool + .composer__tool { margin-left: 8px; }
 .composer__tool {
+  min-height: 44px;
   border: 1px solid rgba(var(--accent-rgb), 0.28);
   background: rgba(16, 22, 27, 0.85);
   color: #a9bac2;
@@ -630,7 +631,7 @@ html, body {
 .micPrompt__btn + .micPrompt__btn { margin-left: 10px; }
 .micPrompt__btn {
   flex: 1 1 0;
-  height: 42px;
+  min-height: 44px;
   border: none;
   border-radius: 21px;
   background: var(--accent);
@@ -787,6 +788,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   right: 20px;
   top: 50%;
   transform: translateY(-50%);
+  min-height: 44px;
   padding: 7px 16px;
   border: 1px solid rgba(var(--accent-rgb), 0.4);
   border-radius: 14px;
@@ -841,19 +843,28 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 }
 .field__input:focus { border-color: rgba(var(--accent-rgb), 0.5); }
 
+/* 44px row so the slider is a legal touch target; the 4px track sits
+   vertically centred on it via the runnable-track pseudo-element. */
 .field__range {
   width: 100%;
+  height: 44px;
   -webkit-appearance: none;
   appearance: none;
+  background: transparent;
+  outline: none;
+  margin: 0;
+}
+.field__range::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
   background: #22303a;
-  outline: none;
 }
-/* 30px thumb — 22px was hard to grab with a finger on a 4-inch screen. */
+/* 30px thumb — 22px was hard to grab with a finger on a 4-inch screen. The
+   thumb sits inside the 44px hit row: -13px pulls it up onto the track. */
 .field__range::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 30px; height: 30px;
+  margin-top: -13px;
   border-radius: 50%;
   background: var(--accent);
   cursor: pointer;
@@ -1607,8 +1618,16 @@ window.Companion = (function () {
   startBlinking(PRESETS.idle.blink);
   lastAppliedAt = Date.now();
 
+  /* The shared "nothing is happening anymore" transition: back to the idle
+     face unless the user asked to sleep. Every dismiss path used to copy
+     this two-line guard. */
+  function settle() {
+    if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+  }
+
   return {
     setEmotion: setEmotion,
+    settle: settle,
     current: current,
     onChange: onChange,
     acknowledge: acknowledge,
@@ -1893,7 +1912,7 @@ window.CompanionChat = (function () {
       if (myBubble !== bubbleId) return;     // a newer bubble already took over
       bubble.setAttribute('data-visible', 'false');
       /* Sleep mode must survive a bubble timing out. */
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
     }, hold);
   }
 
@@ -1931,7 +1950,7 @@ window.CompanionChat = (function () {
       bubble.setAttribute('data-image', 'false');
       bubble.textContent = '';
       if (imageUrl !== null) { URL.revokeObjectURL(imageUrl); imageUrl = null; }
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
     }, holdMs || 8000);
   }
 
@@ -1943,7 +1962,7 @@ window.CompanionChat = (function () {
       window.CompanionSpeech.cancel();
       bubble.setAttribute('data-visible', 'false');
       bubble.setAttribute('data-actions', 'false');
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
     }
     async function snooze(row) {
       var buttons = row.querySelectorAll('button');
@@ -2300,9 +2319,6 @@ window.CompanionChat = (function () {
     isBusy: function () { return inFlight; },
     showBubble: showBubble,
     showImage: showImage,
-    openComposer: openComposer,
-    closeComposer: closeComposer,
-    loadHistory: loadHistory,
     clearHistory: clearHistory
   };
 })();
@@ -2430,7 +2446,7 @@ window.CompanionGlance = (function () {
     if (key === 'backendUrl') refreshNextReminder();
   });
 
-  return { refreshWeather: refreshWeather, redraw: drawClock, updateVisibility: updateVisibility };
+  return { refreshWeather: refreshWeather, updateVisibility: updateVisibility };
 })();
 
 
@@ -2728,6 +2744,8 @@ window.CompanionGlance = (function () {
     qr.make();
 
     var canvas = document.createElement('canvas');
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', 'Wi-Fi QR code');
     var size = 240;
     canvas.width = size; canvas.height = size;
     var ctx = canvas.getContext('2d');
@@ -2783,6 +2801,10 @@ window.CompanionGlance = (function () {
       /* Wait for the sheet transition to make this feel like a deliberate
          setup step, then bring up the URL keyboard. */
       setTimeout(function () { backendInput.focus(); }, 180);
+    } else {
+      /* Without an input focused, move focus to the one button that always
+         works — Done — so a keyboard user is never stranded in the sheet. */
+      setTimeout(function () { document.getElementById('settingsClose').focus(); }, 180);
     }
   }
   function closeSettings() {
@@ -2936,7 +2958,7 @@ window.CompanionGlance = (function () {
       if (healthy !== true) {
         showRetry(false);
         /* Don't stomp sleep mode just because the backend came back. */
-        if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+window.Companion.settle();
       }
       healthy = true;
       return;
@@ -3126,7 +3148,7 @@ window.CompanionVoice = (function () {
       if (myTake !== takeId) return;          // superseded while waiting
       recording = false;
       micBtn.setAttribute('data-recording', 'false');
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
       /* NotAllowedError is a deliberate refusal: stop offering the button. */
       if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
         disableVoice('permission denied');
@@ -3157,7 +3179,7 @@ window.CompanionVoice = (function () {
       stream = null;
       recording = false;
       micBtn.setAttribute('data-recording', 'false');
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
       disableVoice('MediaRecorder construction failed');
       return;
     }
@@ -3216,13 +3238,13 @@ window.CompanionVoice = (function () {
     } else {
       /* Released before the recorder ever started. */
       releaseStream();
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
     }
   }
 
   async function handleClip(blob, durationMs) {
     if (durationMs < MIN_RECORD_MS || blob.size === 0) {
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
       return;
     }
 
@@ -3252,7 +3274,7 @@ window.CompanionVoice = (function () {
 
     if (!text) {
       /* Silence is not an error: just settle back. */
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('idle');
+      window.Companion.settle();
       return;
     }
 

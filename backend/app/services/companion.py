@@ -668,14 +668,15 @@ class CompanionService:
                 result = await tools.execute(name, args)
                 tool_calls_used += 1
                 # Argument values and tool results carry user content
-                # (reminder text, device names); keep the log to shape only.
+                # (reminder text, device names); keep the log to shape only —
+                # full args/results at DEBUG would leak clipboard contents
+                # and reminder text into the log file.
                 logger.info(
                     "Tool %s called with %d argument(s); result %d chars",
                     name,
                     len(args),
                     len(result),
                 )
-                logger.debug("Tool %s args=%r result=%r", name, args, result)
                 messages.append({"role": "tool", "content": result, "name": name})
                 round_tools.append((name, result))
 

@@ -282,8 +282,10 @@ class ProactiveService:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                logger.error("Proactive service stopped with error: %s", e)
             self._task = None
 
 

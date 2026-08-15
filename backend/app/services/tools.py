@@ -14,6 +14,7 @@ import inspect
 import logging
 import re
 import ssl
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
@@ -65,10 +66,6 @@ def register(tool: Tool) -> Tool:
 
 def get(name: str) -> Tool | None:
     return _REGISTRY.get(name)
-
-
-def all_tools() -> list[Tool]:
-    return list(_REGISTRY.values())
 
 
 def render_tool_schemas() -> list[dict]:
@@ -759,7 +756,7 @@ async def _web_lookup(query: str) -> str:
             if hits:
                 summary_r = await client.get(
                     "https://en.wikipedia.org/api/rest_v1/page/summary/"
-                    + hits[0]["title"].replace(" ", "_")
+                    + urllib.parse.quote(hits[0]["title"].replace(" ", "_"), safe="")
                 )
                 summary_r.raise_for_status()
                 summary = ((summary_r.json() or {}).get("extract") or "").strip()
@@ -1320,4 +1317,4 @@ def _register_smart_home_tools() -> None:
 _register_smart_home_tools()
 
 
-__all__ = ["Tool", "execute", "all_tools", "get", "register", "MAX_FACTS"]
+__all__ = ["Tool", "execute", "get", "register", "MAX_FACTS"]

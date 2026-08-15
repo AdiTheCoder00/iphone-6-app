@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     whisper_beam_size: int = Field(1, validation_alias="WHISPER_BEAM_SIZE")
     # Ceiling on an uploaded clip. The frontend caps recording at 15s, so this
     # only ever rejects something that did not come from it.
-    max_audio_mb: int = Field(10, validation_alias="MAX_AUDIO_MB")
+    max_audio_mb: int = Field(10, ge=1, le=100, validation_alias="MAX_AUDIO_MB")
 
     # Text-to-speech (kokoro-onnx, local CPU). Model files (~350 MB) live in
     # TTS_MODEL_DIR and download on first use if absent.
@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     # af_heart is kokoro's warm English female voice. Full list in the
     # kokoro-onnx voices file; af_* / am_* are American, bf_* / bm_* British.
     tts_voice: str = Field("af_heart", validation_alias="TTS_VOICE")
-    tts_speed: float = Field(1.0, validation_alias="TTS_SPEED")
+    tts_speed: float = Field(1.0, ge=0.5, le=2.0, validation_alias="TTS_SPEED")
 
     # Persistence. One SQLite file for reminders and conversation history.
     db_path: str = Field("data/companion.db", validation_alias="DB_PATH")
@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     # reply in that language, the Kokoro TTS voice/lang pair, and pairs with
     # WHISPER_LANGUAGE for recognition. The phone-side speech picker is a
     # separate per-device setting in the PWA.
-    language: str = Field("en", validation_alias="LANGUAGE")
+    language: str = Field("en", pattern="^(en|hi)$", validation_alias="LANGUAGE")
 
     # Rain alert: when today's forecast precipitation probability reaches this
     # percent, the companion mentions it once in the morning. 0 disables.
@@ -159,7 +159,9 @@ class Settings(BaseSettings):
     pc_power_control_enabled: bool = Field(True, validation_alias="PC_POWER_CONTROL_ENABLED")
     # Seconds of warning before an actual Windows shutdown, giving a moment to
     # run `shutdown /a` by hand if something is badly wrong.
-    pc_shutdown_delay_seconds: int = Field(10, validation_alias="PC_SHUTDOWN_DELAY_SECONDS")
+    pc_shutdown_delay_seconds: int = Field(
+        10, ge=0, le=300, validation_alias="PC_SHUTDOWN_DELAY_SECONDS"
+    )
 
     # App launching. name -> path/command, e.g. {"spotify": "spotify:", "vscode": "code"}.
     # The model only ever sees the names here — never a filesystem path it
@@ -179,7 +181,9 @@ class Settings(BaseSettings):
     #   "home_assistant" — go through Home Assistant, which covers nearly
     #                      every brand but has to be running somewhere.
     #   "none"           — smart home tools do not register at all.
-    smart_home_provider: str = Field("none", validation_alias="SMART_HOME_PROVIDER")
+    smart_home_provider: str = Field(
+        "none", pattern="^(kasa|home_assistant|none)$", validation_alias="SMART_HOME_PROVIDER"
+    )
 
     # TP-Link account email/password, required by newer Kasa firmware and all
     # Tapo devices (the KLAP protocol derives the LOCAL handshake from them —
