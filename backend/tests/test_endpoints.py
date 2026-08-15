@@ -62,6 +62,27 @@ def test_health_is_open(client):
     assert client.get("/health").status_code == 200
 
 
+def test_cors_preflight_no_wildcards(client):
+    """iOS 12 Safari rejects "*" in Access-Control-Allow-Methods/-Headers
+    (wildcards landed in Safari 13.1), so every request carrying the token
+    header would fail its preflight. Methods and headers must be explicit;
+    the origin wildcard is fine and stays."""
+    r = client.options(
+        "/chat",
+        headers={
+            "Origin": "https://192.168.1.50:8443",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-companion-token,content-type",
+        },
+    )
+    assert r.status_code == 200
+    assert "x-companion-token" in r.headers["access-control-allow-headers"].lower()
+    assert "content-type" in r.headers["access-control-allow-headers"].lower()
+    assert "post" in r.headers["access-control-allow-methods"].lower()
+    assert "*" not in r.headers["access-control-allow-headers"].lower()
+    assert "*" not in r.headers["access-control-allow-methods"].lower()
+
+
 def test_protected_route_requires_token(client):
     assert client.get("/reminders").status_code == 401
 

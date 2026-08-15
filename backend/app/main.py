@@ -199,6 +199,11 @@ app = FastAPI(
 # Local dev only. CORS_ORIGINS defaults to "*" because the frontend is opened
 # straight from the filesystem or a throwaway static server, which gives it a
 # null/shifting origin. Narrow this before the API is reachable off-machine.
+# Methods and headers are listed explicitly, NOT wildcarded: the phone runs
+# iOS 12, whose Safari rejects "*" in Access-Control-Allow-Methods/-Headers
+# (wildcards landed in Safari 13.1) — every request carrying X-Companion-Token
+# would fail its preflight and the face would report the backend unreachable
+# even though the token-less EventSource stream connects fine.
 app.add_middleware(CompanionTokenMiddleware)
 # Registered after the token check so Starlette wraps CORS outermost: preflight
 # requests are answered before auth, which they must be — a browser sends
@@ -207,8 +212,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["X-Companion-Token", "Content-Type", "Accept"],
 )
 # Registered last so it runs outermost: reject before auth, spooling or CORS
 # handling — the check is header-only and reveals nothing.
