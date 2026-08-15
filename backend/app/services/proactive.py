@@ -72,6 +72,16 @@ class ProactiveService:
         self._last_user_activity = time.monotonic()
         # When the first SSE client of the current stretch connected.
         self._session_started: float | None = None
+        # Detached slow pushes (morning briefing, rain check) that must not
+        # hold the 60s tick; the set keeps them alive so asyncio does not
+        # garbage-collect a pending task mid-flight.
+        self._pending_tasks: set[asyncio.Task] = set()
+
+    def _detach(self, coro) -> None:
+        """Run a slow push without holding the tick loop."""
+        task = asyncio.create_task(coro)
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
 
     def note_user_activity(self) -> None:
         self._last_user_activity = time.monotonic()
@@ -159,7 +169,10 @@ class ProactiveService:
         ):
             self._last_morning_date = today
             self._save_date("proactive.morning_date", today)
-            await self._push(self._morning_instruction(), _FALLBACK_MORNING, "happy")
+            # The briefing (weather + headline feeds) and the LLM call can
+            # take ~30s; holding the tick would delay every other nudge
+            # behind the morning greeting.
+            self._detach(self._push(self._morning_instruction(), _FALLBACK_MORNING, "happy"))
             return
 
         # --- rain alert: once per day when today's forecast says rain
@@ -178,12 +191,16 @@ class ProactiveService:
                 forecast = await tools_module.fetch_forecast(settings.weather_city)
                 prob = forecast.get("today_precip_prob") or 0
                 if prob >= settings.rain_alert_threshold:
-                    await self._push(
-                        f"Rain is likely in {forecast['label']} today "
-                        f"({prob:.0f}% chance). Mention it in one short sentence, "
-                        "and suggest an umbrella if it fits the tone.",
-                        _FALLBACK_RAIN,
-                        "happy",
+                    # Weather fetch can take seconds; same reason as the
+                    # morning greeting — do not hold the tick.
+                    self._detach(
+                        self._push(
+                            f"Rain is likely in {forecast['label']} today "
+                            f"({prob:.0f}% chance). Mention it in one short sentence, "
+                            "and suggest an umbrella if it fits the tone.",
+                            _FALLBACK_RAIN,
+                            "happy",
+                        )
                     )
                     return
             except Exception as e:

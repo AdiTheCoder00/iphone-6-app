@@ -4,6 +4,8 @@ interface Props {
   health: Health | null;
   error: string | null;
   streamConnected: boolean;
+  /* The reconnect backoff gave up: wrong token or dead host. */
+  streamFailed: boolean;
 }
 
 function Dot({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) {
@@ -16,7 +18,7 @@ function Dot({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
   );
 }
 
-export function StatusBar({ health, error, streamConnected }: Props) {
+export function StatusBar({ health, error, streamConnected, streamFailed }: Props) {
   if (error) {
     return (
       <div className="statusbar statusbar--down">
@@ -55,7 +57,16 @@ export function StatusBar({ health, error, streamConnected }: Props) {
         label="Smart home"
         detail={health.ha_connected ? 'connected' : 'not set up'}
       />
-      <Dot ok={streamConnected} label="Live feed" detail={streamConnected ? 'live' : 'reconnecting'} />
+      {/* A wrong token never reaches /health (it is auth-exempt), so the
+       * backend dot can look healthy while every other panel 401s — the
+       * stream failing for good is the tell, and the detail says so. */}
+      <Dot
+        ok={streamConnected}
+        label="Live feed"
+        detail={
+          streamConnected ? 'live' : streamFailed ? 'offline — check the access token' : 'reconnecting'
+        }
+      />
     </div>
   );
 }

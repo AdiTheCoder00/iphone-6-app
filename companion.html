@@ -842,22 +842,28 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   user-select: text;
 }
 .field__input:focus { border-color: rgba(var(--accent-rgb), 0.5); }
+/* Stacked inputs (Wi-Fi QR: SSID then Password) get breathing room instead
+   of touching; 12px matches the form's gap rhythm (7px label, 8px buttons). */
+.field__input + .field__input { margin-top: 12px; }
 
-/* 44px row so the slider is a legal touch target; the 4px track sits
-   vertically centred on it via the runnable-track pseudo-element. */
+/* 44px row so the slider is a legal touch target. The track is drawn as a
+   gradient strip on the input itself: ::-webkit-slider-runnable-track is
+   only supported from Safari 18, so on iOS 12 (the actual target) it would
+   render nothing at all. The webkit pseudo-elements below are kept as a
+   refinement where they exist; the gradient shows everywhere. */
 .field__range {
   width: 100%;
   height: 44px;
   -webkit-appearance: none;
   appearance: none;
-  background: transparent;
+  background: linear-gradient(#22303a, #22303a) no-repeat center / 100% 4px;
   outline: none;
   margin: 0;
 }
 .field__range::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
-  background: #22303a;
+  background: transparent;
 }
 /* 30px thumb — 22px was hard to grab with a finger on a 4-inch screen. The
    thumb sits inside the 44px hit row: -13px pulls it up onto the track. */
@@ -869,6 +875,18 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   background: var(--accent);
   cursor: pointer;
   border: none;
+}
+.field__range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #22303a;
+}
+.field__range::-moz-range-thumb {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
 }
 
 /* A solid settings action button (Show QR, Download conversation), distinct
@@ -941,6 +959,10 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   color: #c3d2da;
   font-size: 13px;
   line-height: 1.35;
+  /* `anywhere` is Safari 14+; on iOS 12 the declaration is dropped entirely,
+     so an unbroken model-authored string would overflow the row. break-word
+     first, anywhere second. */
+  overflow-wrap: break-word;
   overflow-wrap: anywhere;
 }
 .row__when { display: block; margin-top: 2px; color: #5f727c; font-size: 11px; }
@@ -1822,10 +1844,9 @@ window.CompanionChat = (function () {
      as well as server-side so the POST payload stays bounded. */
   var HISTORY_LIMIT = 20;
   /* iOS can kill an EventSource without firing onerror (backgrounding, a
-     Wi-Fi/cellular switch, an idle proxy), and the backend keepalive is a
-     comment-only line that never reaches onmessage. Silence is the only
-     signal: if nothing arrives for three keepalive intervals, reconnect on
-     purpose. */
+     Wi-Fi/cellular switch, an idle proxy). The backend pings every 15s with a
+     real event, so if nothing arrives for three keepalive intervals the
+     stream is genuinely dead — reconnect on purpose. */
   var SSE_STALL_MS = 3 * 15 * 1000;
 
   var toggle = document.getElementById('chatToggle');

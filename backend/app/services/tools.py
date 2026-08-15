@@ -845,9 +845,9 @@ def _register_pc_tools() -> None:
         )
     )
 
-    def _volume(percent: int) -> str:
+    async def _volume(percent: int) -> str:
         try:
-            level = pc_control.set_volume(percent)
+            level = await asyncio.to_thread(pc_control.set_volume, percent)
         except (pc_control.PCControlError, TypeError, ValueError) as e:
             return f"ERROR: could not set volume ({e})"
         return f"Volume set to {level}%."
@@ -862,11 +862,11 @@ def _register_pc_tools() -> None:
         )
     )
 
-    def _mute(muted: bool = True) -> str:
+    async def _mute(muted: bool = True) -> str:
         try:
             # The model may send a real bool or the string "true".
             flag = muted if isinstance(muted, bool) else str(muted).strip().lower() in ("true", "1", "yes")
-            pc_control.set_mute(flag)
+            await asyncio.to_thread(pc_control.set_mute, flag)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return "Muted." if flag else "Unmuted."
@@ -884,9 +884,9 @@ def _register_pc_tools() -> None:
         )
     )
 
-    def _status() -> str:
+    async def _status() -> str:
         try:
-            level, muted = pc_control.get_volume()
+            level, muted = await asyncio.to_thread(pc_control.get_volume)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return f"Volume is {level}%{' (muted)' if muted else ''}."
@@ -901,9 +901,9 @@ def _register_pc_tools() -> None:
         )
     )
 
-    def _lock() -> str:
+    async def _lock() -> str:
         try:
-            pc_control.lock_screen()
+            await asyncio.to_thread(pc_control.lock_screen)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return "PC locked."
@@ -1030,14 +1030,14 @@ def _register_pc_tools() -> None:
 
     if settings.pc_app_whitelist:
 
-        def _launch(name: str) -> str:
+        async def _launch(name: str) -> str:
             name = (name or "").strip().lower()
             path = settings.pc_app_whitelist.get(name)
             if path is None:
                 known = ", ".join(sorted(settings.pc_app_whitelist)) or "none configured"
                 return f"ERROR: '{name}' is not in the app whitelist. Known: {known}"
             try:
-                pc_control.launch_app(path)
+                await asyncio.to_thread(pc_control.launch_app, path)
             except pc_control.PCControlError as e:
                 return f"ERROR: {e}"
             return f"Launched {name}."
@@ -1060,7 +1060,7 @@ def _register_pc_tools() -> None:
             )
         )
 
-    def _open_browser(target: str) -> str:
+    async def _open_browser(target: str) -> str:
         target = (target or "").strip()
         if not target:
             return "ERROR: open_in_browser needs an address or a shortcut name"
@@ -1070,7 +1070,7 @@ def _register_pc_tools() -> None:
         # to visit https://my email.
         resolved = settings.pc_url_shortcuts.get(target.lower(), target)
         try:
-            opened = pc_control.open_url(resolved)
+            opened = await asyncio.to_thread(pc_control.open_url, resolved)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return f"Opened {opened} in the browser."
@@ -1102,7 +1102,7 @@ def _register_pc_tools() -> None:
 
     if settings.pc_power_control_enabled:
 
-        def _power(action: str, confirm: bool = False) -> str:
+        async def _power(action: str, confirm: bool = False) -> str:
             action = (action or "").strip().lower()
             if action not in ("sleep", "shutdown"):
                 return f"ERROR: unknown power action '{action}'. Use: sleep, shutdown"
@@ -1119,9 +1119,11 @@ def _register_pc_tools() -> None:
 
             try:
                 if action == "sleep":
-                    pc_control.sleep_pc()
+                    await asyncio.to_thread(pc_control.sleep_pc)
                     return "PC is going to sleep."
-                pc_control.shutdown_pc(settings.pc_shutdown_delay_seconds)
+                await asyncio.to_thread(
+                    pc_control.shutdown_pc, settings.pc_shutdown_delay_seconds
+                )
                 return (
                     f"Shutting down in {settings.pc_shutdown_delay_seconds} seconds. "
                     "Tell them to save anything open now."

@@ -35,16 +35,27 @@ export function usePoll<T>(
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
   const abortRef = useRef<AbortController | null>(null);
+  /* Generation counter for superseded runs: iOS 12.0/12.1 has no
+   * AbortController, so an old request cannot be killed — it must instead be
+   * ignored when it finally lands. Only the latest run may touch state. */
+  const runGen = useRef(0);
 
   const run = useCallback(async () => {
+    const gen = ++runGen.current;
     abortRef.current?.abort();
-    const controller = new AbortController();
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
     abortRef.current = controller;
     try {
-      const result = await fetcherRef.current(settings, controller.signal);
+      const result = await fetcherRef.current(
+        settings,
+        controller ? controller.signal : undefined,
+      );
+      if (gen !== runGen.current) return;
       setData(result);
       setError(null);
     } catch (e) {
+      if (gen !== runGen.current) return;
       /* An aborted request is the previous one being superseded — not an
        * error worth showing. */
       if (e instanceof DOMException && e.name === 'AbortError') return;
@@ -57,7 +68,9 @@ export function usePoll<T>(
       );
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
-      setLoading(false);
+      /* Only the latest run clears loading — an aborted first load must not
+       * blank a panel while its replacement is still in flight. */
+      if (gen === runGen.current) setLoading(false);
     }
   }, [settings]);
 
@@ -197,8 +210,9 @@ export function useEvents(settings: Settings, limit = 50) {
           return;
         }
         const event = payload as CompanionEvent;
-        if (event.type === 'connected') {
-          setConnected(true);
+        /* Keepalive pings are not feed entries. */
+        if (event.type === 'ping' || event.type === 'connected') {
+          if (event.type === 'connected') setConnected(true);
           return;
         }
         setEvents((prev) =>
@@ -214,11 +228,31 @@ export function useEvents(settings: Settings, limit = 50) {
       };
     };
 
+    /* The phone locks and iOS suspends the page mid-stream; on return the
+     * connection is often a corpse the browser never reported. Jump straight
+     * to a fresh connect instead of waiting out a retry timer or the slow
+     * probe — mirror of the visibility logic in usePoll. */
+    const onVisible = () => {
+      if (document.hidden || closed) return;
+      if (!source || source.readyState === EventSource.CLOSED) {
+        if (retry) {
+          clearTimeout(retry);
+          retry = null;
+        }
+        retryPending = false;
+        delay = SSE_RETRY_MS;
+        failures = 0;
+        connect();
+      }
+    };
+
     connect();
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       closed = true;
       if (retry) clearTimeout(retry);
       source?.close();
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [settings, limit]);
 

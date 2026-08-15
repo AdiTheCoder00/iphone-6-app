@@ -75,18 +75,27 @@ DASHBOARD_CSP = (
 
 # ThreadingHTTPServer spawns a thread per connection with no cap; under the
 # "anyone on the WiFi" threat model a burst of slow connections could exhaust
-# memory. This semaphore throttles concurrent handlers instead.
+# memory. This semaphore throttles concurrent handler threads instead.
 MAX_HANDLER_THREADS = 32
+
+# How long a handler waits for a free slot before the connection is dropped
+# (the browser will just retry). Bounded, so an exhausted pool slows new
+# clients down instead of freezing the accept loop entirely.
+SLOT_WAIT_SECONDS = 5
 
 
 class _ThrottledServer(ThreadingHTTPServer):
-    """ThreadingHTTPServer with a cap on concurrent handlers.
+    """ThreadingHTTPServer with a cap on concurrent handler threads.
 
     The stock server spawns a thread per connection with no limit; under the
     "anyone on the WiFi" threat model a burst of slow connections could
     exhaust memory. The semaphore is taken before a handler thread is spawned
     and released when that handler finishes, so only slow/stuck connections
     accumulate past the cap.
+
+    The acquire is bounded (see SLOT_WAIT_SECONDS): when the pool is full the
+    connection is closed instead of blocking the accept loop — the server
+    keeps answering existing clients, and the dropped client simply retries.
     """
 
     daemon_threads = True
@@ -96,8 +105,23 @@ class _ThrottledServer(ThreadingHTTPServer):
         self._slots = threading.BoundedSemaphore(MAX_HANDLER_THREADS)
 
     def process_request(self, request, client_address):
-        self._slots.acquire()
-        super().process_request(request, client_address)
+        if not self._slots.acquire(timeout=SLOT_WAIT_SECONDS):
+            # Pool exhausted; drop this connection rather than stall the
+            # accept loop. The client retries on its own.
+            self.log_error("handler pool exhausted, dropping connection from %s",
+                           client_address[0])
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            # Thread creation failed ("can't start new thread"): no handler
+            # thread will run, so release the slot here or it is lost forever.
+            self._slots.release()
+            raise
 
     def process_request_thread(self, request, client_address):
         try:
@@ -107,6 +131,12 @@ class _ThrottledServer(ThreadingHTTPServer):
 
 
 class CompanionHandler(SimpleHTTPRequestHandler):
+    # Reap idle HTTP/1.1 keep-alive connections: browsers hold one open for
+    # minutes with no work to do, and every open connection consumes a handler
+    # thread + a throttle slot. 30s of silence closes it; the browser's
+    # keep-alive logic reconnects transparently on the next request.
+    timeout = 30
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
@@ -178,6 +208,13 @@ class CompanionHandler(SimpleHTTPRequestHandler):
             return True
         if target.is_file():
             self._send_file(target, "public, max-age=86400")
+            return True
+        # Anything that looks like a file (has an extension) but does not
+        # exist is a real miss — a stale hash reference, a partial deploy.
+        # Serving index.html (text/html) for a .js/.css request would be a
+        # MIME-blocked script wearing a misleading 200.
+        if "." in rel.rsplit("/", 1)[-1]:
+            self.send_error(404, "Not found")
             return True
         target = DASHBOARD_DIR / "index.html"
         if not target.is_file():

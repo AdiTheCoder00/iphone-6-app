@@ -47,6 +47,16 @@ self.addEventListener('activate', (event) => {
       .then((keys) => Promise.all(
         keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))
       ))
+      /* A transient failure during install can leave the fresh shell
+         incomplete (a single missing entry). Repair it here — quietly, so a
+         blip cannot fail activation — otherwise the gap would persist until
+         that exact URL happened to be fetched again. */
+      .then(() => caches.open(CACHE))
+      .then((cache) => Promise.all(
+        SHELL.map((url) => cache.match(url).then((hit) => {
+          if (!hit) return cache.add(url).catch(() => {});
+        }))
+      ))
       .then(() => self.clients.claim())
   );
 });

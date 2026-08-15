@@ -196,6 +196,16 @@ class ReminderService:
             logger.info("Scheduled power action %r executed: %s", action, row["text"])
         except Exception as e:
             logger.error("Scheduled power action %r failed: %s", action, e)
+            # Re-arm the claim so the next poll retries — a failed scheduled
+            # shutdown must not be silently lost. Guarded on fired = 1, so
+            # only the claimer can re-arm; the stale-retirement guard bounds
+            # how long a persistently failing action keeps retrying.
+            if store.unmark_fired(row["id"]):
+                logger.warning(
+                    "Power action %r re-armed for retry (reminder %d)",
+                    action,
+                    row["id"],
+                )
 
     async def _poll_loop(self) -> None:
         while True:

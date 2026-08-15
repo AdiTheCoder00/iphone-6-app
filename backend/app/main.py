@@ -73,23 +73,31 @@ class _TokenRedactingFilter(logging.Filter):
     /events accepts the token as a query parameter (EventSource cannot set
     headers), so uvicorn's access log would otherwise write it verbatim —
     and those logs live next to the repo on disk.
+
+    The redaction must rewrite record.args, not record.request_line: uvicorn's
+    AccessFormatter builds the final line from args (it copies the record and
+    reconstructs request_line inside formatMessage, after filters have run).
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        request_line = getattr(record, "request_line", None)
-        if isinstance(request_line, str):
-            record.request_line = re.sub(
-                r"([?&]token=)[^&\s]+", r"\1<redacted>", request_line
-            )
+        args = record.args
+        if args and len(args) >= 3:
+            path = str(args[2])
+            path = re.sub(r"[?&]token=[^&\s]+", "", path)
+            token = settings.companion_token
+            if token:
+                path = path.replace(token, "[REDACTED]")
+            record.args = (*args[:2], path, *args[3:])
         return True
 
 
 logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
-# Proxies and mobile radios drop idle connections; a periodic comment line
-# keeps the SSE stream alive without emitting a real event.
+# Proxies and mobile radios drop idle connections; a periodic ping event keeps
+# the SSE stream alive. It must be a REAL event, not a comment line: comment
+# lines never reach the client's onmessage, so the phone-side stall watchdog
+# would reconnect a healthy-but-quiet stream every few minutes.
 KEEPALIVE_INTERVAL_SECONDS = 15
-KEEPALIVE_TICK = ": keep-alive\n\n"
 
 # A keyword spotter commonly fires two or three times on one utterance, and the
 # tail of the companion's own reply can retrigger it. Anything inside this
@@ -102,24 +110,38 @@ def sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+KEEPALIVE_TICK = sse_event({"type": "ping"})
+
+
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     """Reject oversized uploads from the Content-Length header before
-    Starlette spools the body to disk. Without this, the /transcribe size cap
-    runs only after the whole upload has been written out, and anyone on the
-    LAN could fill the disk with repeated large POSTs."""
+    Starlette spools the body to disk. Without this, the /transcribe and
+    /vision size caps run only after the whole upload has been written out,
+    and anyone on the LAN could fill the disk with repeated large POSTs.
+
+    Content-Length covers the whole multipart envelope for /vision (the
+    image itself is capped again inside the endpoint). A chunked upload sends
+    no Content-Length, so it is not stopped here — a streaming read cap would
+    be needed for that, which Starlette's middleware API does not expose.
+    """
 
     def __init__(self, app, max_bytes: int) -> None:
         super().__init__(app)
         self._max_bytes = max_bytes
 
     async def dispatch(self, request, call_next):
-        if request.method == "POST" and request.url.path == "/transcribe":
+        if (
+            request.method == "POST"
+            and request.url.path in ("/transcribe", "/vision")
+        ):
             length = request.headers.get("content-length")
             if length and length.isdigit() and int(length) > self._max_bytes:
-                return JSONResponse(
-                    {"detail": f"Audio exceeds {settings.max_audio_mb} MB limit"},
-                    status_code=413,
+                what = (
+                    f"Audio exceeds {settings.max_audio_mb} MB limit"
+                    if request.url.path == "/transcribe"
+                    else f"Image exceeds {settings.max_audio_mb} MB limit"
                 )
+                return JSONResponse({"detail": what}, status_code=413)
         return await call_next(request)
 
 

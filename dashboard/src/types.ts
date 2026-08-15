@@ -67,6 +67,7 @@ export interface SmartDevices {
  * through as an untyped string. */
 export type CompanionEventType =
   | 'connected'
+  | 'ping'
   | 'reminder'
   | 'timer'
   | 'wake'

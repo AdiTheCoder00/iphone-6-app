@@ -52,12 +52,23 @@ export default function App() {
     smart: smart.refresh,
   };
 
+  /* Refresh() aborts the poll currently in flight; firing all four per event
+   * during a burst (or with a slow backend) would keep aborting polls that
+   * never get to finish, leaving the panels dependent on the refreshers
+   * alone. Coalesce: at most one refresh per panel per cooldown, and none at
+   * all while the tab is hidden. */
+  const REFRESH_COOLDOWN_MS = 3_000;
+  const lastRefreshed = useRef<Record<string, number>>({});
+
   useEffect(() => {
-    if (latestEventId < 0) return;
-    refreshers.current.reminders();
-    refreshers.current.conversation();
-    refreshers.current.facts();
-    refreshers.current.smart();
+    if (latestEventId < 0 || document.hidden) return;
+    const now = Date.now();
+    const names = ['reminders', 'conversation', 'facts', 'smart'] as const;
+    for (const name of names) {
+      if (now - (lastRefreshed.current[name] ?? 0) < REFRESH_COOLDOWN_MS) continue;
+      lastRefreshed.current[name] = now;
+      refreshers.current[name]();
+    }
   }, [latestEventId]);
 
   return (
@@ -73,7 +84,12 @@ export default function App() {
         <SettingsBar settings={settings} onSave={updateSettings} />
       </header>
 
-      <StatusBar health={health.data} error={health.error} streamConnected={connected} />
+      <StatusBar
+        health={health.data}
+        error={health.error}
+        streamConnected={connected}
+        streamFailed={failed}
+      />
 
       <main className="grid">
         <PCPanel status={pc.data} error={pc.error} loading={pc.loading} />

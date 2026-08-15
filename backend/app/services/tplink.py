@@ -26,8 +26,15 @@ logger = logging.getLogger(__name__)
 # so a repeat command is effectively instant.
 _DISCOVERY_TTL_SECONDS = 120.0
 
+# A failed scan (dead network, offline plug) must not re-pay the full 6s
+# discovery on every /health probe; failures are cached for a short window
+# too. Empty-but-successful scans ride the same window via _cached_at.
+_NEGATIVE_TTL_SECONDS = 20.0
+
 _cache: dict[str, object] = {}
 _cached_at = 0.0
+_last_error: str | None = None
+_last_error_at = 0.0
 # Serialises discovery: without it, two concurrent tool calls on a cold cache
 # would each kick off their own full LAN scan.
 _discovery_lock = asyncio.Lock()
@@ -49,11 +56,18 @@ def _credentials():
 
 async def _discover(force: bool = False) -> dict[str, object]:
     """Return {alias: device}, re-scanning only when the cache is stale."""
-    global _cache, _cached_at
+    global _cache, _cached_at, _last_error, _last_error_at
 
     async with _discovery_lock:
+        if not force and _last_error and (
+            time.monotonic() - _last_error_at < _NEGATIVE_TTL_SECONDS
+        ):
+            raise TPLinkError(_last_error)
+
         fresh = time.monotonic() - _cached_at < _DISCOVERY_TTL_SECONDS
-        if _cache and fresh and not force:
+        # Timestamp-based, not dict-based: an empty result ({}) must also be
+        # cached, or a scan that finds nothing re-runs on every call.
+        if _cached_at and fresh and not force:
             return _cache
 
         from kasa import Discover
@@ -63,7 +77,11 @@ async def _discover(force: bool = False) -> dict[str, object]:
                 credentials=_credentials(), discovery_timeout=6
             )
         except Exception as e:
-            raise TPLinkError(f"device discovery failed ({e})") from e
+            _last_error, _last_error_at = (
+                f"device discovery failed ({e})",
+                time.monotonic(),
+            )
+            raise TPLinkError(_last_error) from e
 
         devices: dict[str, object] = {}
         auth_failures = 0
@@ -83,12 +101,15 @@ async def _discover(force: bool = False) -> dict[str, object]:
             devices[alias] = device
 
         if not devices and auth_failures:
-            raise TPLinkError(
+            _last_error, _last_error_at = (
                 f"{auth_failures} device(s) found but rejected the credentials — "
-                "check TPLINK_USERNAME and TPLINK_PASSWORD in backend/.env"
+                "check TPLINK_USERNAME and TPLINK_PASSWORD in backend/.env",
+                time.monotonic(),
             )
+            raise TPLinkError(_last_error)
 
         _cache, _cached_at = devices, time.monotonic()
+        _last_error = None
         return devices
 
 

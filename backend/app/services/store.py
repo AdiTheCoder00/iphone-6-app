@@ -162,6 +162,25 @@ class Store:
             conn.commit()
         return cur.rowcount > 0
 
+    def unmark_fired(self, reminder_id: int, retry_at: float | None = None) -> bool:
+        """Re-arm a claimed row whose execution failed, so the next poll retries.
+
+        Guarded on fired = 1 so only the claimer can re-arm it. retry_at is
+        the new fire time — now by default, meaning "retry immediately on the
+        next tick"; the stale-retirement guard bounds how often that can
+        happen.
+        """
+        conn = self._require()
+        with self._lock:
+            if retry_at is None:
+                retry_at = time.time()
+            cur = conn.execute(
+                "UPDATE reminders SET fired = 0, fire_time = ? WHERE id = ? AND fired = 1",
+                (retry_at, reminder_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
     def rearm_recurring(self, reminder_id: int, repeat: str, scheduled_fire_time: float) -> None:
         """Re-queue a recurring reminder at its next occurrence.
 

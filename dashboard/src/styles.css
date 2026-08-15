@@ -40,16 +40,20 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
   flex-wrap: wrap;
   margin-bottom: 18px;
 }
+/* iOS 12 (Safari <14.1) ignores gap in flex containers, so spacing is done
+   with margins — the same trade companion.html makes. Wrapped rows lose only
+   the vertical gap, which is a cosmetic edge case. */
+.topbar > * + * { margin-left: 20px; }
 
-.brand { display: flex; align-items: center; gap: 12px; }
+.brand { display: flex; align-items: center; }
+.brand > * + * { margin-left: 12px; }
 .brand h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
 
 /* The companion's two eyes, shrunk to a logo. */
-.brand__eyes { display: flex; gap: 6px; }
+.brand__eyes { display: flex; }
 .brand__eyes i {
   width: 11px;
   height: 16px;
@@ -57,21 +61,23 @@ body {
   background: var(--accent);
   box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.5);
 }
+.brand__eyes i + i { margin-left: 6px; }
 
 /* --- settings ------------------------------------------------------------ */
 .settingsbar {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
   flex-wrap: wrap;
   padding: 12px 14px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
+.settingsbar > * + * { margin-left: 12px; }
 .settingsbar--collapsed { align-items: center; font-size: 13px; }
 
-.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+.field { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); }
+.field > * + * { margin-top: 5px; }
 .field input {
   min-width: 230px;
   height: 34px;
@@ -89,7 +95,6 @@ body {
 .statusbar {
   display: flex;
   align-items: center;
-  gap: 22px;
   flex-wrap: wrap;
   padding: 12px 16px;
   margin-bottom: 20px;
@@ -98,9 +103,11 @@ body {
   border-radius: var(--radius);
   font-size: 13px;
 }
+.statusbar > * + * { margin-left: 22px; }
 .statusbar--down { color: var(--bad); }
 
-.stat { display: flex; align-items: center; gap: 7px; }
+.stat { display: flex; align-items: center; }
+.stat > * + * { margin-left: 7px; }
 .stat__label { color: var(--text); }
 .stat__detail { color: var(--muted); font-size: 12px; }
 
@@ -130,10 +137,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
   padding: 13px 16px;
   border-bottom: 1px solid var(--line);
 }
+.panel__head > * + * { margin-left: 12px; }
 .panel__title {
   margin: 0;
   font-size: 11px;
@@ -142,7 +149,8 @@ body {
   text-transform: uppercase;
   color: #93a3ad;
 }
-.panel__aside { display: flex; align-items: center; gap: 8px; }
+.panel__aside { display: flex; align-items: center; }
+.panel__aside > * + * { margin-left: 8px; }
 .panel__body { padding: 14px 16px; }
 
 .muted { color: var(--muted); font-size: 13px; margin: 0; }
@@ -158,21 +166,23 @@ body {
 }
 
 /* --- rows ---------------------------------------------------------------- */
-.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.row + .row { margin-top: 8px; }
 
 .row {
   display: flex;
   align-items: center;
-  gap: 12px;
   padding: 10px 12px;
   background: #070c10;
   border: 1px solid var(--line);
   border-radius: 10px;
 }
+.row > * + * { margin-left: 12px; }
 .row__main { flex: 1 1 auto; min-width: 0; }
 .row__text { font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
 .row__sub { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
-.row__actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.row__actions { display: flex; align-items: center; flex: 0 0 auto; }
+.row__actions > * + * { margin-left: 6px; }
 
 /* --- buttons ------------------------------------------------------------- */
 .btn {
@@ -198,7 +208,8 @@ body {
 .btn--danger { border-color: rgba(232, 139, 139, 0.35); background: transparent; color: #b9848a; }
 .btn--danger:hover:not(:disabled) { background: rgba(232, 139, 139, 0.14); color: var(--bad); }
 
-.confirm { display: flex; gap: 6px; }
+.confirm { display: flex; }
+.confirm > * + * { margin-left: 6px; }
 
 /* --- toggle switch ------------------------------------------------------- */
 .toggle {
@@ -259,7 +270,8 @@ body {
 .meter__fill--bad { background: var(--bad); }
 
 /* --- conversation -------------------------------------------------------- */
-.chat { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+.chat { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.bubble + .bubble { margin-top: 8px; }
 .bubble {
   padding: 9px 12px;
   border-radius: 12px;

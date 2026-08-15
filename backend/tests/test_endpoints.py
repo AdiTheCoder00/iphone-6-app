@@ -18,9 +18,13 @@ TEST_TOKEN = "test-token-abc123"
 
 
 @pytest.fixture(scope="module")
-def client():
+def client(tmp_path_factory):
     mp = pytest.MonkeyPatch()
     mp.setattr(settings, "companion_token", TEST_TOKEN)
+    # The lifespan calls store.init() with whatever db_path says — before any
+    # function-scoped fixture has run. Point it at a throwaway file so the
+    # real backend/data/companion.db is never opened (or created) by tests.
+    mp.setattr(settings, "db_path", str(tmp_path_factory.mktemp("db") / "test.db"))
     with TestClient(app) as c:
         yield c
     mp.undo()
