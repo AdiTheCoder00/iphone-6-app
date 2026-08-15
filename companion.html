@@ -446,8 +446,9 @@ html, body {
 .bubble__action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Image bubbles (screenshot, Wi-Fi QR) — the image fills the bubble and the
-   dark text styling must not apply to it. */
-.bubble[data-image="true"] { padding: 10px; }
+   dark text styling must not apply to it. The 240px QR must be fully
+   scannable, so image bubbles escape the 186px text-bubble height cap. */
+.bubble[data-image="true"] { padding: 10px; max-height: none; }
 .bubble__image {
   display: block;
   width: 100%;
@@ -465,6 +466,10 @@ html, body {
 }
 .stage[data-composer="open"] .bubble[data-actions="true"] {
   max-height: 176px;
+}
+/* A screenshot taken with the composer open must not get clipped either. */
+.stage[data-composer="open"] .bubble[data-image="true"] {
+  max-height: none;
 }
 
 .composer {
@@ -1135,7 +1140,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
         <div class="field__label">Wi-Fi QR <span class="field__value">for guests</span></div>
         <input class="field__input" id="setQrSsid" type="text" autocapitalize="words"
                autocorrect="off" spellcheck="false" placeholder="SSID" />
-        <input class="field__input" id="setQrPassword" type="text" autocapitalize="off"
+        <input class="field__input" id="setQrPassword" type="password" inputmode="text" autocapitalize="off"
                autocorrect="off" spellcheck="false" placeholder="Password" />
         <button class="field__btn" id="qrShowBtn" type="button">Show QR</button>
       </div>
@@ -2716,7 +2721,10 @@ window.CompanionGlance = (function () {
       }
     }
     /* The bubble lifecycle (visibility, auto-dismiss, sleep gating) lives in
-       CompanionChat — same path as screenshots. */
+       CompanionChat — same path as screenshots. Close the sheet first: the
+       bubble (z-index 3) sits below the settings overlay (z-index 6), so an
+       open sheet would cover the QR completely. */
+    closeSettings();
     window.CompanionChat.showImage(canvas, 12000);
   });
 
