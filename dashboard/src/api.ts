@@ -64,6 +64,11 @@ function base(settings: Settings): string {
   return settings.backendUrl.replace(/\/+$/, '');
 }
 
+/* fetch() has no timeout of its own; a half-open connection would otherwise
+ * hold a poll in flight until the next tick's abort. Race every request
+ * against this, matching the companion.html wrapper. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function request<T>(
   settings: Settings,
   path: string,
@@ -74,11 +79,22 @@ async function request<T>(
   if (settings.token) headers['X-Companion-Token'] = settings.token;
   if (init.body) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(base(settings) + path, { ...init, headers, signal });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Request timed out')), REQUEST_TIMEOUT_MS);
+  });
+  try {
+    const response = await Promise.race([
+      fetch(base(settings) + path, { ...init, headers, signal }),
+      timeout,
+    ]);
+    if (response.status === 401) throw new UnauthorizedError();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const api = {

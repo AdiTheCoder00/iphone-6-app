@@ -39,13 +39,25 @@ export default function App() {
    * 20s timer. Refreshers are held in a ref so this fires on a new event
    * only, not every time a poll hook hands back a new callback identity. */
   const latestEventId = events[0]?.id ?? -1;
-  const refreshers = useRef({ reminders: reminders.refresh, conversation: conversation.refresh });
-  refreshers.current = { reminders: reminders.refresh, conversation: conversation.refresh };
+  const refreshers = useRef({
+    reminders: reminders.refresh,
+    conversation: conversation.refresh,
+    facts: facts.refresh,
+    smart: smart.refresh,
+  });
+  refreshers.current = {
+    reminders: reminders.refresh,
+    conversation: conversation.refresh,
+    facts: facts.refresh,
+    smart: smart.refresh,
+  };
 
   useEffect(() => {
     if (latestEventId < 0) return;
     refreshers.current.reminders();
     refreshers.current.conversation();
+    refreshers.current.facts();
+    refreshers.current.smart();
   }, [latestEventId]);
 
   return (

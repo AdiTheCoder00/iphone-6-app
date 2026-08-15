@@ -64,13 +64,21 @@ export function usePoll<T>(
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
-      if (!cancelled) void run();
+      /* A backgrounded tab must not keep probing the backend on its
+       * interval — on a phone-class client that is pure battery burn. The
+       * visibilitychange handler re-runs immediately on return. */
+      if (!cancelled && !document.hidden) void run();
+    };
+    const onVisible = () => {
+      if (!document.hidden) void run();
     };
     tick();
     const id = setInterval(tick, intervalMs);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
       abortRef.current?.abort();
       abortRef.current = null;
     };
@@ -129,6 +137,14 @@ export function useEvents(settings: Settings, limit = 50) {
       if (failures >= SSE_MAX_FAILURES) {
         setConnected(false);
         setFailed(true);
+        /* A wrong token or dead host never fixes itself, but the backend can
+         * come back later — keep one slow probe going so the live feed
+         * recovers without a reload. onopen resets the failure counter. */
+        retryPending = true;
+        retry = setTimeout(() => {
+          retryPending = false;
+          connect();
+        }, SSE_RETRY_MAX_MS);
         return;
       }
       retryPending = true;

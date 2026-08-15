@@ -428,9 +428,10 @@ html, body {
 .bubble__actions {
   display: flex;
   justify-content: center;
-  gap: 8px;
   margin-top: 10px;
 }
+/* Margin rather than flex `gap` — the iPhone 6's iOS 12 Safari has no gap. */
+.bubble__action + .bubble__action { margin-left: 8px; }
 .bubble__action {
   min-height: 44px;
   padding: 0 14px;
@@ -533,10 +534,10 @@ html, body {
 
 .composer__tools {
   display: flex;
-  gap: 8px;
   margin-top: 8px;
   justify-content: flex-end;
 }
+.composer__tool + .composer__tool { margin-left: 8px; }
 .composer__tool {
   border: 1px solid rgba(var(--accent-rgb), 0.28);
   background: rgba(16, 22, 27, 0.85);
@@ -625,7 +626,8 @@ html, body {
 }
 .micPrompt__title { margin: 0 0 10px; color: #dfe9ee; font-size: 17px; }
 .micPrompt__body { margin: 0 0 20px; color: #8b9ea8; font-size: 13px; line-height: 1.55; }
-.micPrompt__row { display: flex; gap: 10px; }
+.micPrompt__row { display: flex; }
+.micPrompt__btn + .micPrompt__btn { margin-left: 10px; }
 .micPrompt__btn {
   flex: 1 1 0;
   height: 42px;
@@ -679,7 +681,6 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
   color: #7d8f99;
   font-size: 12px;
   letter-spacing: 0.02em;
@@ -688,6 +689,8 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   transition: opacity 300ms ease;
 }
 .retry[data-visible="true"] { opacity: 1; pointer-events: auto; }
+/* iOS 12 has no flex `gap`; space the dot/text/button with margins. */
+.retry > * + * { margin-left: 7px; }
 .retry__dot {
   width: 6px;
   height: 6px;
@@ -913,7 +916,6 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 .row {
   display: flex;
   align-items: center;
-  gap: 10px;
   padding: 9px 12px;
   margin-bottom: 6px;
   border: 1px solid rgba(255,255,255,0.07);
@@ -939,6 +941,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   position: relative;
   flex: 0 0 auto;
   width: 34px; height: 34px;
+  margin-left: 10px;
   border: none;
   border-radius: 50%;
   background: rgba(255,255,255,0.06);
@@ -1260,17 +1263,24 @@ window.CompanionConfig = (function () {
     if (state.token) headers['X-Companion-Token'] = state.token;
     requestOptions.headers = headers;
 
-    var timer = controller ? setTimeout(function () { controller.abort(); },
-      typeof timeoutMs === 'number' ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS) : null;
-    return fetch(backendUrl() + path, requestOptions).then(
-      function (response) {
-        if (timer !== null) clearTimeout(timer);
-        return response;
-      },
-      function (error) {
-        if (timer !== null) clearTimeout(timer);
-        throw error;
-      }
+    var ms = typeof timeoutMs === 'number' ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS;
+    var timer;
+    if (controller) {
+      timer = setTimeout(function () { controller.abort(); }, ms);
+      return fetch(backendUrl() + path, requestOptions).then(
+        function (response) { clearTimeout(timer); return response; },
+        function (error) { clearTimeout(timer); throw error; }
+      );
+    }
+    /* iOS 12.0/12.1 have no AbortController, so the fetch cannot be aborted —
+       but a hung request must still error out instead of leaving the UI busy
+       forever, so race it against a timeout rejection. */
+    var timeoutPromise = new Promise(function (resolve, reject) {
+      timer = setTimeout(function () { reject(new Error('Request timed out')); }, ms);
+    });
+    return Promise.race([fetch(backendUrl() + path, requestOptions), timeoutPromise]).then(
+      function (response) { clearTimeout(timer); return response; },
+      function (error) { clearTimeout(timer); throw error; }
     );
   }
 
@@ -1807,6 +1817,13 @@ window.CompanionChat = (function () {
 
   /* In-memory only — cleared on reload, no persistence yet. */
   var conversation = [];
+
+  /* The payload only ever sends the last HISTORY_LIMIT entries, so anything
+     older than 2x is dead weight — and on a days-long kiosk the array would
+     otherwise grow without bound. */
+  function trimHistory() {
+    if (conversation.length > HISTORY_LIMIT * 2) conversation = conversation.slice(-HISTORY_LIMIT * 2);
+  }
   var inFlight = false;
   var bubbleTimer = null;
   /* Two separate generations, deliberately.
@@ -1968,6 +1985,7 @@ window.CompanionChat = (function () {
     var mySend = ++sendId;
     var myTurn = { role: 'user', content: text };
     conversation.push(myTurn);
+    trimHistory();
 
     /* A new turn supersedes the previous reply, so stop speaking it — this
        covers the typed path, where there was no mic press to interrupt. */
@@ -2014,6 +2032,7 @@ window.CompanionChat = (function () {
       }
 
       conversation.push({ role: 'assistant', content: data.reply });
+      trimHistory();
       window.Companion.setEmotion(data.emotion || 'idle');
       showBubble(data.reply, false);
       window.CompanionSpeech.speak(data.reply);
@@ -2079,6 +2098,7 @@ window.CompanionChat = (function () {
       var data = await res.json();
       if (mySend !== sendId) return;
       conversation.push({ role: 'assistant', content: data.text });
+      trimHistory();
       window.Companion.setEmotion('happy');
       showBubble(data.text, false);
       window.CompanionSpeech.speak(data.text);
@@ -2239,6 +2259,7 @@ window.CompanionChat = (function () {
       if (myGen === historyGeneration && conversation.length === 0 &&
           Array.isArray(data.messages) && data.messages.length) {
         conversation = data.messages.slice();
+        trimHistory();
         console.info('[Companion] restored ' + conversation.length + ' message(s)');
       }
     } catch (e) {
@@ -2965,6 +2986,17 @@ window.CompanionGlance = (function () {
     vv.addEventListener('resize', applyKeyboardInset);
     vv.addEventListener('scroll', applyKeyboardInset);
     applyKeyboardInset();
+  } else {
+    /* iOS 12 has no visualViewport, but the keyboard still shrinks
+       innerHeight (this page never scrolls, so a toolbar collapse is not a
+       source of noise). Measure the delta from the boot baseline. */
+    var kbBaseline = window.innerHeight;
+    var applyKeyboardInsetFallback = function () {
+      var covered = kbBaseline - window.innerHeight;
+      stage.style.setProperty('--kb', (covered > 8 ? Math.round(covered / stageScale) : 0) + 'px');
+    };
+    window.addEventListener('resize', applyKeyboardInsetFallback);
+    applyKeyboardInsetFallback();
   }
 
   /* --- service worker -----------------------------------------------------
