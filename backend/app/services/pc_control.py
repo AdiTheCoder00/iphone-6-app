@@ -366,6 +366,13 @@ def open_url(url: str) -> str:
             )
         if not parsed.netloc:
             raise PCControlError(f"'{url}' is not a valid web address")
+        # Same program-suffix rejection as the bare-hostname branch: an
+        # explicit scheme must not smuggle one through — "http://notepad.exe"
+        # would otherwise reach the browser and depend on ITS host resolution
+        # to refuse the open.
+        host = (parsed.hostname or "").lower()
+        if host.endswith(_PROGRAM_SUFFIXES):
+            raise PCControlError(f"'{url}' looks like a program, not a website")
         final = url
     else:
         # No scheme: accept it only if it genuinely looks like a bare

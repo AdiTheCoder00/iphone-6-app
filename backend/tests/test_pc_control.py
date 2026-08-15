@@ -74,6 +74,9 @@ def test_open_url_refuses_hostile_input(monkeypatch):
         "localhost:8080": "only http and https",
         "notepad.exe": "looks like a program",
         "calc.exe": "looks like a program",
+        # An explicit scheme does not buy a pass for a program-looking host.
+        "http://notepad.exe": "looks like a program",
+        "https://calc.exe/path?q=1": "looks like a program",
     }
     for given, message in bad.items():
         with pytest.raises(pc_control.PCControlError, match=message):
