@@ -1003,6 +1003,156 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   line-height: 1.5;
   text-align: center;
 }
+
+/* ===========================================================================
+   6. DECK — a peeking sheet holding what the PC and the house are doing.
+   The face keeps the space above it; nothing here ever covers the eyes.
+   ========================================================================= */
+.stage { --deck-h: 298px; }
+
+/* The face centres in the space ABOVE the sheet rather than the whole screen,
+   so raising the sheet does not push the eyes off-centre. The 34px optical
+   nudge goes with it: with the sheet occupying the lower half there is no
+   longer a tall empty space below the face to compensate for. */
+.face-root { padding-bottom: var(--deck-h); padding-top: 0; }
+
+.deck {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  z-index: 2;
+  height: var(--deck-h);
+  padding: 10px 16px 0;
+  border-radius: 22px 22px 0 0;
+  background: rgba(14, 21, 26, 0.96);
+  border-top: 1px solid rgba(var(--accent-rgb), 0.18);
+  /* Slides down with the keyboard rather than being covered by it. */
+  transform: translateY(var(--kb, 0px));
+  transition: transform 240ms cubic-bezier(0.4,0,0.2,1);
+}
+/* The grab handle, same as the settings sheet. */
+.deck::before {
+  content: '';
+  display: block;
+  width: 36px; height: 4px;
+  margin: 0 auto 14px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.16);
+}
+
+.deck__pages {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.deck__pages::-webkit-scrollbar { display: none; }
+
+.deck__card {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  padding: 12px 13px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  background: #070c10;
+}
+.deck__title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck__meta  { margin-top: 3px; color: #7d8f9a; font-size: 12px; min-height: 15px; }
+
+.deck__meters { display: flex; margin-top: 12px; }
+.deck__meter { flex: 1 1 0; }
+/* iOS 12 ignores flex gap — the same margin trade the rest of this file makes. */
+.deck__meter + .deck__meter { margin-left: 14px; }
+.deck__meter__head { display: flex; justify-content: space-between; font-size: 11px; color: #7d8f9a; }
+.deck__meter__head b { color: #dfe9ee; font-weight: 400; }
+.deck__meter__track { margin-top: 5px; height: 5px; border-radius: 3px; background: #10171d; overflow: hidden; }
+/* scaleX, not width: width is a layout property, so animating it reflowed the
+   sheet on every 5s poll. The rounded ends come from the track's own radius. */
+.deck__meter__fill  {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 400ms ease;
+}
+.deck__meter__fill[data-level="warn"] { background: #f0c26a; }
+.deck__meter__fill[data-level="bad"]  { background: #e88b8b; }
+
+.deck__dots { display: flex; justify-content: center; margin: 12px 0; }
+.deck__dot { width: 4px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); transition: width 200ms ease, background 200ms ease; }
+.deck__dot + .deck__dot { margin-left: 6px; }
+.deck__dot[data-active="true"] { width: 16px; background: var(--accent); }
+
+.deck__pills { display: flex; overflow-x: auto; scrollbar-width: none; }
+.deck__pills::-webkit-scrollbar { display: none; }
+.deck__pill + .deck__pill { margin-left: 8px; }
+.deck__pill {
+  display: flex; align-items: center;
+  /* 44px is the iOS minimum touch target; these are the primary controls on
+     the sheet and must not be smaller. */
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 22px;
+  background: #070c10;
+  color: #7d8f9a;
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.deck__pill::before { content: ''; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #31414a; }
+.deck__pill[aria-pressed="true"] {
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: #9debf3;
+}
+.deck__pill[aria-pressed="true"]::before { background: var(--accent); }
+.deck__pill:disabled { opacity: 0.5; }
+.deck__empty { color: #55666f; font-size: 12px; }
+
+/* --- the two controls move into the sheet --------------------------------- */
+/* The chat button is redundant now: the input is always on screen. */
+.dock__chat { display: none; }
+.dock {
+  position: absolute;
+  right: 16px;
+  bottom: calc(16px + var(--kb, 0px));
+  z-index: 4;
+  height: auto;
+  justify-content: flex-end;
+}
+/* The composer is permanently up, sitting beside the mic. */
+.composer {
+  left: 16px;
+  right: 80px;
+  bottom: calc(20px + var(--kb, 0px));
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+/* Tools only appear once you are actually typing. */
+.composer__tools { display: none; }
+.composer[data-typing="true"] .composer__tools { display: flex; }
+
+/* The bubble clears the sheet instead of the old 86px dock. */
+.bubble,
+.stage[data-composer="open"] .bubble { bottom: calc(var(--deck-h) + 14px); max-height: 150px; }
+
+/* Sits in the gap between the face and the sheet. Keeping the old 178px
+   offset above the bubble would have put it at 191px from the top of the
+   stage — directly over the eyes, which span 122-246px once the sheet claims
+   the lower 298. The whole point of this direction is that nothing covers the
+   face, so the strip loses the offset instead. It can still meet a stale
+   bubble, which is the same overlap the original layout accepted (bubble 86,
+   retry 128) and only reachable when the backend is already down. */
+.retry { bottom: calc(var(--deck-h) + 8px); }
+
+/* Standalone mode hid the dock until tapped; here the sheet IS the affordance,
+   so the mic stays put. Without this the mic is invisible AND untappable on
+   the installed PWA, which is exactly the bug that shipped once before. */
+body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 </style>
 </head>
 <body>
@@ -1058,6 +1208,37 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
     </div>
     <input type="file" id="photoInput" accept="image/*" hidden />
   </form>
+
+  <!-- ---------------------------------------------------------------- DECK -->
+  <!-- The peeking sheet: what the PC and the house are doing, paged. Sits
+       below the face and never covers it. -->
+  <div class="deck" id="deck">
+    <div class="deck__pages" id="deckPages">
+      <div class="deck__card" id="deckPc" role="group" aria-label="This computer">
+        <div class="deck__title" id="deckPcTitle">Nothing playing</div>
+        <div class="deck__meta" id="deckPcMeta"></div>
+        <div class="deck__meters">
+          <div class="deck__meter">
+            <div class="deck__meter__head"><span>CPU</span><b id="deckCpuValue">—</b></div>
+            <div class="deck__meter__track"><div class="deck__meter__fill" id="deckCpu"></div></div>
+          </div>
+          <div class="deck__meter">
+            <div class="deck__meter__head"><span>Memory</span><b id="deckRamValue">—</b></div>
+            <div class="deck__meter__track"><div class="deck__meter__fill" id="deckRam"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="deck__card" id="deckNext" role="group" aria-label="Next reminder">
+        <div class="deck__title" id="deckNextText">Nothing scheduled</div>
+        <div class="deck__meta" id="deckNextWhen"></div>
+      </div>
+    </div>
+    <div class="deck__dots" id="deckDots" aria-hidden="true">
+      <span class="deck__dot" data-active="true"></span>
+      <span class="deck__dot"></span>
+    </div>
+    <div class="deck__pills" id="deckPills"></div>
+  </div>
 
   <div class="retry" id="retry" data-visible="false" role="status">
     <span class="retry__dot"></span><span id="retryText">can’t reach the backend</span>
@@ -3391,6 +3572,150 @@ window.CompanionVoice = (function () {
     endRecording: endRecording,
     autoRecord: autoRecord
   };
+})();
+
+/* ===========================================================================
+   DECK — the peeking sheet. Polls at the same rates the dashboard uses: PC
+   status is the only genuinely live number, so the lists tick far slower.
+
+   Endpoint paths here were checked against backend/app/main.py rather than
+   taken on trust: the routes are GET /status/pc (not /pc/status) and
+   POST /smart/devices/{id}/state with a {turn_on} body (not a bare {on} on
+   the collection path). Both differ from the shape the design patch assumed.
+   ========================================================================= */
+(function () {
+  'use strict';
+
+  var PC_INTERVAL = 5000;
+  var LIST_INTERVAL = 20000;
+
+  var pages = document.getElementById('deckPages');
+  var dots = document.getElementById('deckDots').children;
+  var pills = document.getElementById('deckPills');
+  var request = window.CompanionConfig.request;
+
+  function meter(fillId, valueId, percent) {
+    var fill = document.getElementById(fillId);
+    var value = document.getElementById(valueId);
+    if (percent === null || percent === undefined) {
+      value.textContent = '—';
+      fill.style.transform = 'scaleX(0)';
+      return;
+    }
+    var pct = Math.max(0, Math.min(100, percent));
+    fill.style.transform = 'scaleX(' + (pct / 100) + ')';
+    fill.setAttribute('data-level', pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : 'ok');
+    value.textContent = Math.round(pct) + '%';
+  }
+
+  function loadPc() {
+    return request('/status/pc').then(function (res) {
+      if (!res.ok) return;
+      return res.json().then(function (s) {
+        var track = s.now_playing;
+        document.getElementById('deckPcTitle').textContent =
+          track ? (track.title || 'Unknown track') : 'Nothing playing';
+        document.getElementById('deckPcMeta').textContent = track
+          ? [track.artist, track.app, track.status].filter(Boolean).join(' · ')
+          : '';
+        meter('deckCpu', 'deckCpuValue', s.cpu_percent);
+        meter('deckRam', 'deckRamValue', s.ram_percent);
+      });
+    }).catch(function () { /* the retry strip already reports a dead backend */ });
+  }
+
+  function loadNext() {
+    return request('/reminders').then(function (res) {
+      if (!res.ok) return;
+      return res.json().then(function (data) {
+        var list = (data.reminders || []).slice();
+        list.sort(function (a, b) { return a.fire_time - b.fire_time; });
+        var next = list[0];
+        document.getElementById('deckNextText').textContent = next ? next.text : 'Nothing scheduled';
+        document.getElementById('deckNextWhen').textContent = next
+          ? new Date(next.fire_time * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+            + ' · ' + list.length + ' pending'
+          : '';
+      });
+    }).catch(function () {});
+  }
+
+  function loadDevices() {
+    return request('/smart/devices').then(function (res) {
+      if (!res.ok) return;
+      return res.json().then(function (data) {
+        pills.textContent = '';
+        if (!data.available) {
+          /* Distinguish "no provider configured" from "you own no devices" —
+             an empty strip reads as the second and sends you hunting. */
+          var note = document.createElement('span');
+          note.className = 'deck__empty';
+          note.textContent = 'Smart home not set up';
+          pills.appendChild(note);
+          return;
+        }
+        (data.devices || []).slice(0, 6).forEach(function (d) {
+          pills.appendChild(pill(d));
+        });
+      });
+    }).catch(function () {});
+  }
+
+  function pill(device) {
+    var b = document.createElement('button');
+    b.className = 'deck__pill';
+    b.type = 'button';
+    b.textContent = device.name;
+    b.setAttribute('aria-pressed', device.state === 'on' ? 'true' : 'false');
+    b.addEventListener('click', function () {
+      var turnOn = b.getAttribute('aria-pressed') !== 'true';
+      b.disabled = true;
+      /* Optimistic: the lamp responds long before the poll would, and a pill
+         that sits unchanged for a second reads as a dropped tap. */
+      b.setAttribute('aria-pressed', turnOn ? 'true' : 'false');
+      request('/smart/devices/' + encodeURIComponent(device.entity_id) + '/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turn_on: turnOn })
+      }).catch(function () {}).then(function () {
+        b.disabled = false;
+        /* Refetch either way, so a failed toggle self-corrects. */
+        loadDevices();
+      });
+    });
+    return b;
+  }
+
+  /* Page dots follow the scroll position — no swipe handler needed, the sheet
+     is a scroll-snap container. */
+  pages.addEventListener('scroll', function () {
+    var i = Math.round(pages.scrollLeft / pages.clientWidth);
+    for (var n = 0; n < dots.length; n++) {
+      dots[n].setAttribute('data-active', n === i ? 'true' : 'false');
+    }
+  }, { passive: true });
+
+  /* Typing state drives .composer__tools visibility. */
+  var input = document.getElementById('composerInput');
+  var composer = document.getElementById('composer');
+  input.addEventListener('focus', function () { composer.setAttribute('data-typing', 'true'); });
+  input.addEventListener('blur', function () { composer.setAttribute('data-typing', 'false'); });
+
+  /* A desk companion sits idle for hours; polling a backend it cannot see is
+     pure battery burn, so the timers stand down while the page is hidden and
+     refresh immediately on return rather than waiting out the interval. */
+  function tick(fn) {
+    return function () { if (!document.hidden) fn(); };
+  }
+  function refreshAll() { loadPc(); loadNext(); loadDevices(); }
+
+  refreshAll();
+  setInterval(tick(loadPc), PC_INTERVAL);
+  setInterval(tick(loadNext), LIST_INTERVAL);
+  setInterval(tick(loadDevices), LIST_INTERVAL);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshAll();
+  });
 })();
 </script>
 </body>
