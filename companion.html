@@ -720,13 +720,13 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 
 .settings__sheet {
   width: 100%;
-  /* Capped and scrollable. The sheet grows with every reminder and
-     remembered fact, and unbounded it ran past the top of a 667px screen —
-     taking the title with it and leaving nothing to tap to dismiss. */
+  /* Capped flex column: the title stays pinned as a plain header and only
+     .settings__body scrolls. iOS 12 Safari (the iPhone-6-era OS) cannot
+     scroll a container that also holds a sticky element, so there is
+     deliberately nothing sticky here. */
   max-height: 76vh;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 0 20px 22px;
+  display: flex;
+  flex-direction: column;
   background: #0e151a;
   border-top: 1px solid rgba(var(--accent-rgb), 0.18);
   border-radius: 20px 20px 0 0;
@@ -735,21 +735,27 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 }
 .settings[data-open="true"] .settings__sheet { transform: translateY(0); }
 
-/* The sheet is bottom-pinned, so without extra room the keyboard covers the
+/* The body is bottom-pinned, so without extra room the keyboard covers the
    Backend URL / token / city inputs the moment one of them is focused. The
    stage's --kb (keyboard height) becomes bottom padding, letting the fields
    scroll clear of it. */
-.settings[data-open="true"] .settings__sheet {
+.settings[data-open="true"] .settings__body {
   padding-bottom: calc(22px + var(--kb, 0px));
 }
 
-/* Sticky so the title and the drag handle stay put while the body scrolls —
-   without it there is no visual anchor and no hint that the sheet scrolls. */
+/* The fields scroll in their own container — a flex child needs min-height: 0
+   to shrink below its content, otherwise overflow never engages. */
+.settings__body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  padding: 0 20px 22px;
+}
+
+/* The header is pinned as a plain flex row, not sticky — see .settings__sheet
+   above — so the title and the drag handle stay put while the body scrolls. */
 .settings__title {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  margin: 0 -20px 14px;
+  position: relative;
   padding: 14px 20px 11px;
   background: #0e151a;
   color: #8fa3ad;
@@ -1059,6 +1065,8 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
         <button class="settings__close" id="settingsClose" type="button">Done</button>
       </div>
 
+      <div class="settings__body">
+
       <div class="field">
         <label class="field__label" for="setBackend">Backend URL</label>
         <input class="field__input" id="setBackend" type="url" inputmode="url"
@@ -1141,6 +1149,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
         For an always-on desk device also set<br />
         Settings › Display &amp; Brightness › Auto-Lock › Never
       </p>
+      </div>
     </div>
   </div>
 

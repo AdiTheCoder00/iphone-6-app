@@ -30,11 +30,18 @@ long-press the face to open Settings and change **Backend URL** to
 not the computer.
 
 `serve_frontend.py` serves **only** the PWA's own files (`companion.html`,
-`qrcode.js`, `sw.js`, `manifest.json`, `icons/`) — everything else in the repo
-answers 404. The repository root also holds `certs/` (private keys),
-`backend/data/` (the conversation database) and `backend/venv`, and a plain
-`python -m http.server` would have exposed all of them to anyone on the LAN,
-so don't fall back to one.
+`qrcode.js`, `sw.js`, `manifest.json`, `icons/`) and the built dashboard
+(`dashboard/dist/` at `/dashboard/`, with a fallback to `index.html`) —
+everything else in the repo answers 404. The repository root also holds
+`certs/` (private keys), `backend/data/` (the conversation database) and
+`backend/venv`, and a plain `python -m http.server` would have exposed all of
+them to anyone on the LAN, so don't fall back to one.
+
+To build the dashboard (needed once, or after editing `dashboard/src/`):
+
+```powershell
+npm run build   # in dashboard/
+```
 
 The first use of voice transcription and TTS downloads their local model files;
 the initial response may therefore take longer than later ones.

@@ -14,9 +14,13 @@ Usage:
 HTTPS is what unlocks getUserMedia (tap-to-talk) and the service worker on
 iOS; it needs the locally-trusted chain in certs/ (see README) and the phone
 must trust companion-ca.crt first.
+
+The built React dashboard (dashboard/dist, `npm run build`) is served at
+/dashboard/ with a SPA fallback to index.html.
 """
 
 import argparse
+import mimetypes
 import ssl
 import sys
 import urllib.parse
@@ -50,6 +54,11 @@ CACHE_LONG = {
 # The shell itself: an edited companion.html must win over any cache.
 CACHE_NO = {"/companion.html", "/sw.js", "/manifest.json"}
 
+# Built dashboard (React/Vite, `npm run build` in dashboard/). Served under
+# /dashboard/ — a whole directory of build output, so it gets a branch of its
+# own below rather than entries in the exact-path whitelist.
+DASHBOARD_DIR = ROOT / "dashboard" / "dist"
+
 
 class CompanionHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -72,11 +81,66 @@ class CompanionHandler(SimpleHTTPRequestHandler):
             return False
         return True
 
+    def _send_file(self, target: Path, cache: str) -> None:
+        """Serve one file with a Content-Length and the given cache policy."""
+        try:
+            data = target.read_bytes()
+        except OSError:
+            self.send_error(404, "Not found")
+            return
+        content_type, _ = mimetypes.guess_type(target.name)
+        self.send_response(200)
+        self.send_header("Content-Type", content_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache)
+        self.end_headers()
+        if self.command == "GET":
+            self.wfile.write(data)
+
+    def _serve_dashboard(self) -> bool:
+        """Serve the built dashboard (dashboard/dist) under /dashboard/.
+
+        Assets are served as-is with a long cache; anything else — the bare
+        /dashboard/, or any path that is not a real file — falls back to
+        index.html (the app has no client-side router today, but deep links
+        would keep working if that ever changes). Returns True when the
+        request was handled, False to continue with the PWA whitelist path.
+        """
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/dashboard":
+            self.send_response(301)
+            self.send_header("Location", "/dashboard/")
+            self.end_headers()
+            return True
+        if not path.startswith("/dashboard/"):
+            return False
+
+        rel = path[len("/dashboard/"):]
+        if ".." in rel.split("/"):
+            self.send_error(404, "Not in the dashboard whitelist")
+            return True
+        target = DASHBOARD_DIR / rel
+        if target.is_file():
+            self._send_file(target, "public, max-age=86400")
+            return True
+        target = DASHBOARD_DIR / "index.html"
+        if not target.is_file():
+            self.send_error(
+                404, "dashboard not built — run `npm run build` in dashboard/"
+            )
+            return True
+        self._send_file(target, "no-cache")
+        return True
+
     def do_GET(self):
+        if self._serve_dashboard():
+            return
         if self._guarded():
             super().do_GET()
 
     def do_HEAD(self):
+        if self._serve_dashboard():
+            return
         if self._guarded():
             super().do_HEAD()
 
