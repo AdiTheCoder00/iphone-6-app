@@ -4,8 +4,11 @@
  * Listens on an I2S microphone and POSTs to the companion backend when it
  * decides someone is talking to it:
  *
- *     POST http://<BACKEND_HOST>:<BACKEND_PORT>/wake
+ *     POST https://<BACKEND_HOST>:<BACKEND_PORT>/wake
  *     { "source": "esp32", "timestamp": <millis since boot> }
+ *
+ * TLS: the backend is HTTPS-only when certs exist, and this sketch verifies
+ * its certificate against the CA in config.h (BACKEND_CA_CERT).
  *
  * The backend debounces (3s) and pushes a "wake" event down its SSE stream;
  * the phone reacts by listening and auto-recording. Nothing else on the
@@ -63,7 +66,7 @@
 #include "config.h"
 
 #ifndef COMPANION_CONFIG_PROVIDED
-  #error "Missing wake_esp32s3/config.h — copy config.h.example to config.h and set WIFI_SSID, WIFI_PASSWORD, BACKEND_HOST and BACKEND_TOKEN."
+  #error "Missing wake_esp32s3/config.h — copy config.h.example to config.h and set WIFI_SSID, WIFI_PASSWORD, BACKEND_HOST, BACKEND_TOKEN and BACKEND_CA_CERT."
 #endif
 
 /* --- audio ---------------------------------------------------------------- */
@@ -266,17 +269,25 @@ static void postWake() {
   }
 
   char url[96];
-  snprintf(url, sizeof(url), "http://%s:%u/wake", BACKEND_HOST, BACKEND_PORT);
+  snprintf(url, sizeof(url), "https://%s:%u/wake", BACKEND_HOST, BACKEND_PORT);
 
   char body[96];
   snprintf(body, sizeof(body),
            "{\"source\":\"esp32\",\"timestamp\":%lu}", (unsigned long)millis());
 
+  /* TLS: the backend is HTTPS-only when certs exist (start-servers.ps1 adds
+   * --ssl-* to uvicorn), so a plain HTTPClient would send the token into a
+   * TLS port and fail every wake. WiFiClientSecure pins the server to the CA
+   * pasted into config.h (BACKEND_CA_CERT) — regenerating the CA on the PC
+   * means reflashing this board. */
+  WiFiClientSecure client;
+  client.setCACert(BACKEND_CA_CERT);
+
   HTTPClient http;
   http.setConnectTimeout(2000);
   http.setTimeout(3000);          // never let a stalled backend block listening
 
-  if (!http.begin(url)) {
+  if (!http.begin(client, url)) {
     Serial.println("[wake] http.begin failed");
     return;
   }
@@ -286,6 +297,9 @@ static void postWake() {
   const int status = http.POST((uint8_t*)body, strlen(body));
   if (status > 0) {
     Serial.printf("[wake] POST %s -> %d %s\n", url, status, http.getString().c_str());
+    if (status == HTTP_CODE_UNAUTHORIZED) {
+      Serial.println("[wake] 401: BACKEND_TOKEN in config.h does not match COMPANION_TOKEN in backend/.env");
+    }
   } else {
     Serial.printf("[wake] POST failed: %s\n", HTTPClient::errorToString(status).c_str());
   }

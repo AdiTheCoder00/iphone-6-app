@@ -27,4 +27,14 @@ static const uint16_t BACKEND_PORT = 8000;
  * dead microphone — check the serial log, the POST result is printed there. */
 static const char* BACKEND_TOKEN = "PASTE_COMPANION_TOKEN_HERE";
 
+/* The CA that signed the backend's TLS certificate — paste the full contents
+ * of certs/companion-ca.crt on the PC between the quotes, one PEM line per
+ * C string fragment ending in \n. The wake sketch verifies the backend's
+ * certificate against this (the backend is HTTPS-only when certs exist).
+ * Regenerating the CA means reflashing the board. */
+static const char* BACKEND_CA_CERT =
+  "-----BEGIN CERTIFICATE-----\n"
+  "PASTE_CA_PEM_LINES_HERE\n"
+  "-----END CERTIFICATE-----\n";
+
 #endif /* COMPANION_CONFIG_H */
