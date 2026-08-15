@@ -1310,6 +1310,133 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 }
 .pair__step--done .pair__title { margin-top: 22px; }
 .pair__step--done .pair__foot { margin-top: 28px; width: 100%; max-width: 280px; }
+
+/* ===========================================================================
+   8. THINKING & DO NOT DISTURB (mockups 3a, 3b).
+   Both re-tint the eyes by overriding --accent on .face-root only. Section 1
+   warns that the accent must live on .stage so the composer and dock — which
+   are siblings of the face, not children — can see it. That is exactly why
+   these overrides go on .face-root instead: the recolour is meant to stop at
+   the face, leaving the controls their normal colour.
+   ========================================================================= */
+
+/* --- 3a: thinking -------------------------------------------------------- */
+/* No new state to track: every path that waits on the backend already sets
+   the think emotion, so the treatment hangs off the attribute that is
+   already there. */
+.face-root[data-emotion="think"] {
+  --accent: #f0c26a;
+  --accent-rgb: 240, 194, 106;
+}
+
+/* Absolutely positioned rather than added to .face-root's flex row, which
+   centres the face — a third flex child would shove the eyes off-centre. */
+.think-dots, .think-caption {
+  position: absolute;
+  left: 0; right: 0;
+  display: flex;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 240ms ease;
+  pointer-events: none;
+}
+.think-dots { top: calc(50% + 84px); }
+.think-caption {
+  top: calc(50% + 108px);
+  color: #7d8f9a;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+.face-root[data-emotion="think"] .think-dots,
+.face-root[data-emotion="think"] .think-caption { opacity: 1; }
+
+.think-dots i {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #f0c26a;
+  animation: thinkDot 1.4s ease-in-out infinite;
+}
+.think-dots i + i { margin-left: 8px; }
+.think-dots i:nth-child(2) { animation-delay: 0.18s; }
+.think-dots i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes thinkDot {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 0.9; }
+}
+
+/* The controls recede while it works, as drawn. */
+.face-root[data-emotion="think"] ~ .dock { opacity: 0.5; }
+
+/* --- 3b: do not disturb -------------------------------------------------- */
+/* Grey, unlit eyes: the glow is what makes the face look awake, so muting the
+   wake word turns it off rather than merely dimming it. */
+.stage[data-dnd="true"] .face-root {
+  --accent: #5b6a72;
+  --accent-rgb: 91, 106, 114;
+}
+/* The glow is killed by setting opacity outright, not by zeroing
+   --glow-opacity: the face module writes the emotion preset onto #face as
+   INLINE custom properties, and an inline declaration beats any stylesheet
+   rule no matter how specific. Overriding the property the variable feeds is
+   the only route that wins. */
+.stage[data-dnd="true"] .eye__glow { opacity: 0; }
+.stage[data-dnd="true"] .face { opacity: 0.7; }
+
+.dnd-chip {
+  position: absolute;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: none;
+  align-items: center;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(240, 194, 106, 0.12);
+  color: #f0c26a;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dnd-chip::before {
+  content: '';
+  width: 6px; height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #f0c26a;
+}
+.stage[data-dnd="true"] .dnd-chip { display: flex; }
+
+.dnd-note {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(var(--deck-h) + 46px);
+  z-index: 2;
+  display: none;
+  text-align: center;
+  color: #4f6069;
+  font-size: 12.5px;
+  pointer-events: none;
+}
+.stage[data-dnd="true"] .dnd-note { display: block; }
+
+/* The slash over the mic. A real mark rather than a dimmed icon: "off" and
+   "unavailable" look identical when the only difference is opacity. */
+.dock__mic { position: relative; }
+.dock__mic::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 32px; height: 1.5px;
+  background: currentColor;
+  transform: translate(-50%, -50%) rotate(45deg);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.stage[data-dnd="true"] .dock__mic::after { opacity: 1; }
+.stage[data-dnd="true"] .dock__mic { color: #5b7280; }
 </style>
 </head>
 <body>
@@ -1346,7 +1473,17 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       </div>
       <div class="face__mouth"><div class="mouth__arc"></div></div>
     </div>
+    <!-- Shown only while data-emotion is "think" (mockup 3a). aria-hidden: the
+         reply itself is announced by the bubble's own live region, and a
+         second announcement for "thinking…" would talk over it. -->
+    <div class="think-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="think-caption" aria-hidden="true">thinking…</div>
   </div>
+
+  <!-- Do not disturb (mockup 3b): the chip is the off switch, so turning it
+       back on never needs a settings trip. -->
+  <button class="dnd-chip" id="dndChip" type="button">Do not disturb</button>
+  <div class="dnd-note" aria-hidden="true">reminders still fire silently</div>
 
   <!-- ---------------------------------------------------------------- CHAT -->
   <!-- A region supports the reminder action buttons; a `status` role must not
@@ -1564,6 +1701,12 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       </div>
 
       <div class="field">
+        <button class="toggle" id="setDnd" type="button" aria-pressed="false">
+          <span>Do not disturb</span><span class="toggle__state" id="setDndState">Off</span>
+        </button>
+      </div>
+
+      <div class="field">
         <button class="toggle" id="setSleep" type="button" aria-pressed="false">
           <span>Sleep now</span><span class="toggle__state" id="setSleepState">Off</span>
         </button>
@@ -1626,7 +1769,12 @@ window.CompanionConfig = (function () {
        `token` because a backend with no COMPANION_TOKEN set is legitimately
        paired with an empty one — keying the first-run screen off the token
        would strand those users on it forever. */
-    paired: false
+    paired: false,
+    /* Do not disturb: the wake word is ignored and replies are not spoken.
+       Reminders still arrive and still show — silencing the one feature whose
+       whole value is interrupting you would make this a way to miss things,
+       not a way to be left alone. */
+    dnd: false
   };
   var listeners = [];
   var state;
@@ -1648,7 +1796,8 @@ window.CompanionConfig = (function () {
            first-run screen it does not need. */
         paired: typeof parsed.paired === 'boolean'
           ? parsed.paired
-          : !!(parsed && parsed.backendUrl)
+          : !!(parsed && parsed.backendUrl),
+        dnd: !!parsed.dnd
       };
     } catch (e) {
       /* Private mode or a corrupt value: fall back rather than fail to boot. */
@@ -2195,6 +2344,11 @@ window.CompanionSpeech = (function () {
     if (!window.CompanionConfig.get('voice')) return;
     /* Never speak into a dark room. */
     if (window.CompanionConfig.get('sleepNow')) return;
+    /* Gated here rather than at each call site so do-not-disturb covers every
+       route to the speaker — replies, reminders, timers and proactive
+       messages alike. A reminder still appears on screen; it just arrives
+       quietly. */
+    if (window.CompanionConfig.get('dnd')) return;
     if (!text) return;
 
     var mySpeak = ++speakGeneration;
@@ -2663,7 +2817,12 @@ window.CompanionChat = (function () {
 
       } else if (event.type === 'wake') {
         /* External keyword spotter (ESP32) heard its wake word. Show that we
-           heard it, then start capturing without waiting for a button. */
+           heard it, then start capturing without waiting for a button.
+
+           Do not disturb drops it silently: opening the microphone is the one
+           thing the user has just said not to do, and acknowledging the wake
+           at all would defeat the point of muting it. */
+        if (window.CompanionConfig.get('dnd')) return;
         window.Companion.setEmotion(event.emotion || 'listen');
         window.Companion.acknowledge();
         if (window.CompanionVoice) window.CompanionVoice.autoRecord();
@@ -4273,6 +4432,53 @@ window.CompanionVoice = (function () {
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) stopCamera();
   });
+})();
+
+/* ===========================================================================
+   DO NOT DISTURB — mockup 3b.
+   The state itself lives in config; this only reflects it onto the stage and
+   offers the two ways in and out. What it actually suppresses is enforced at
+   the source in each case: the wake handler drops wake events, and
+   CompanionSpeech.speak() refuses to talk.
+   ========================================================================= */
+(function () {
+  'use strict';
+
+  var cfg = window.CompanionConfig;
+  var stage = document.getElementById('stage');
+  var chip = document.getElementById('dndChip');
+  var toggle = document.getElementById('setDnd');
+  var toggleState = document.getElementById('setDndState');
+
+  function render(on) {
+    stage.setAttribute('data-dnd', on ? 'true' : 'false');
+    toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+    toggleState.textContent = on ? 'On' : 'Off';
+    /* The chip is the way back out, so it has to say what tapping it does. */
+    chip.textContent = 'Do not disturb';
+    chip.setAttribute('aria-label', 'Do not disturb is on. Tap to turn it off.');
+  }
+
+  function set(on) {
+    cfg.set('dnd', on);
+    /* Turning it on mid-recording would leave the mic open, which is the one
+       state this mode exists to prevent. */
+    if (on && window.CompanionVoice && window.CompanionVoice.isRecording()) {
+      window.CompanionVoice.endRecording();
+    }
+  }
+
+  toggle.addEventListener('click', function () { set(!cfg.get('dnd')); });
+  chip.addEventListener('click', function () { set(false); });
+
+  /* Config is the single source of truth: react to the change rather than
+     re-rendering at each call site, so the settings toggle and the chip stay
+     in step no matter which one was used. */
+  cfg.onChange(function (key, value) {
+    if (key === 'dnd') render(value);
+  });
+
+  render(cfg.get('dnd'));
 })();
 </script>
 </body>
