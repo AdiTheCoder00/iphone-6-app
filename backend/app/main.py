@@ -27,6 +27,7 @@ from app.models.schemas import (
     FactOut,
     FactsResponse,
     HealthResponse,
+    MediaActionRequest,
     NowPlaying,
     PCStatusResponse,
     ReminderOut,
@@ -419,6 +420,29 @@ async def pc_status():
         logger.info("Dashboard system stats unavailable: %s", e)
 
     return result
+
+
+@app.post("/pc/media")
+async def pc_media(body: MediaActionRequest):
+    """Play/pause, next, previous — the dashboard's transport control.
+
+    The read-only rule above still holds for lock/sleep/shutdown. Transport is
+    the exception for the same reason a lamp toggle is: pressing play again
+    undoes a mis-clicked pause, so there is nothing here a stray click can do
+    that the next click cannot take back. The action set is closed by the
+    request schema rather than by this function.
+    """
+    from app.services import pc_control
+
+    if not pc_control.IS_WINDOWS or not settings.pc_control_enabled:
+        raise HTTPException(status_code=503, detail="PC control is not available on this host")
+    try:
+        # Tapping a virtual key is a blocking user32 call; keep it off the loop.
+        await asyncio.to_thread(pc_control.media, body.action)
+    except pc_control.PCControlError as e:
+        logger.warning("Dashboard media action %s failed: %s", body.action, e)
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return {"action": body.action}
 
 
 @app.get("/smart/devices", response_model=SmartDevicesResponse)

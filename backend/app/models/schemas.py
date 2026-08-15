@@ -144,6 +144,15 @@ class PCStatusResponse(BaseModel):
     battery_plugged: bool | None = None
 
 
+class MediaActionRequest(BaseModel):
+    # Transport only. Deliberately NOT the full pc_control.MEDIA_KEYS set: the
+    # dashboard gets the actions a mis-click can undo by clicking again, which
+    # is the same line /smart/devices/{id}/state is drawn on. Declaring it as a
+    # Literal means FastAPI rejects anything else with a 422 before the request
+    # ever reaches the keyboard-tapping code.
+    action: Literal["play_pause", "next", "previous"]
+
+
 class SmartDeviceOut(BaseModel):
     entity_id: str
     name: str
