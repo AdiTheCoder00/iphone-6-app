@@ -35,6 +35,10 @@ ROOT = Path(__file__).resolve().parent
 ALLOWED_PATHS = {
     "/companion.html",
     "/qrcode.js",
+    # QR decoder for the pairing screen's camera. Fetched on demand rather
+    # than at boot, but it still has to be reachable or the scan button leads
+    # nowhere — this allowlist is the whole reason a missing entry 404s.
+    "/jsqr.js",
     "/sw.js",
     "/manifest.json",
     "/design/mockups.html",
@@ -47,6 +51,7 @@ ALLOWED_PATHS = {
 # Unchanging assets: the browser may hold these without revalidating.
 CACHE_LONG = {
     "/qrcode.js",
+    "/jsqr.js",
     "/icons/icon-180.png",
     "/icons/icon-192.png",
     "/icons/icon-512.png",

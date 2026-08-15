@@ -15,7 +15,7 @@
 /* Bump this version whenever the shell changes — the browser only checks for
  * a new service worker script on navigation, and an unchanged sw.js can keep
  * a stale companion.html in play for a long time on iOS. */
-const CACHE = 'companion-shell-v5';
+const CACHE = 'companion-shell-v6';
 
 /* Only the shell. API calls live on a different origin and must never be
  * served from cache — a stale reply or a stale reminder would be worse than

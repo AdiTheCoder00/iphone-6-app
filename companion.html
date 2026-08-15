@@ -1153,6 +1153,163 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
    so the mic stays put. Without this the mic is invisible AND untappable on
    the installed PWA, which is exactly the bug that shipped once before. */
 body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
+
+/* ===========================================================================
+   7. PAIRING — first-run flow (mockups 3c, 1d, 3d).
+   A full-stage overlay rather than a route: the shell underneath keeps its
+   state, so dismissing this reveals a companion that is already running.
+   ========================================================================= */
+.pair {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  padding: 44px 24px 24px;
+  background: radial-gradient(120% 80% at 50% 22%, #131b21 0%, #0a0d0f 55%, #05070a 100%);
+  color: #dfe9ee;
+}
+.pair[hidden] { display: none; }
+.pair__step { display: none; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.pair__step[data-active="true"] { display: flex; }
+
+/* Progress rule: three segments, filled up to the current step. */
+.pair__dots { display: flex; justify-content: center; margin-bottom: 26px; flex: 0 0 auto; }
+.pair__dots i {
+  width: 22px; height: 3px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.14);
+  transition: background 240ms ease;
+}
+.pair__dots i + i { margin-left: 6px; }
+.pair__dots i[data-on="true"] { background: var(--accent); }
+
+.pair__title { margin: 0; font-size: 21px; font-weight: 500; letter-spacing: 0.01em; text-align: center; }
+.pair__sub { margin: 9px 0 0; text-align: center; color: #7d8f9a; font-size: 13px; line-height: 1.55; }
+
+/* --- 3c: found on the network ------------------------------------------- */
+.pair__found {
+  margin: 28px auto 0;
+  width: 100%; max-width: 280px;
+  padding: 16px;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  border-radius: 14px;
+  background: #0e151a;
+  display: flex;
+  align-items: center;
+}
+.pair__found__icon {
+  width: 44px; height: 44px; flex: 0 0 auto;
+  margin-right: 14px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.12);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+}
+.pair__found__main { min-width: 0; }
+.pair__found__name { font-size: 14.5px; font-weight: 500; }
+.pair__found__meta { margin-top: 3px; color: #7d8f9a; font-size: 12px; overflow-wrap: anywhere; }
+.pair__alt { margin: 18px auto 0; color: #4f6069; font-size: 12px; text-align: center; }
+.pair__alt button {
+  border: 0; background: none; padding: 0;
+  color: var(--accent); font: inherit; font-size: 12px;
+  text-decoration: underline; cursor: pointer;
+}
+
+/* --- 1d: scan or type ---------------------------------------------------- */
+.pair__scan {
+  position: relative;
+  margin: 24px auto 0;
+  width: 196px; height: 196px; flex: 0 0 auto;
+  border-radius: 16px;
+  border: 1px dashed rgba(var(--accent-rgb), 0.35);
+  background: #070c10;
+  overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: #4f6069; font-size: 11.5px; text-align: center; line-height: 1.5;
+}
+/* The live camera fills the frame once granted; until then the placeholder
+   icon and caption sit in the same box. */
+.pair__scan video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.pair__scan__hint { position: relative; z-index: 1; padding: 0 14px; }
+.pair__scan[data-live="true"] .pair__scan__hint { display: none; }
+
+.pair__divider {
+  display: flex; align-items: center;
+  margin: 22px 0 18px;
+  color: #4f6069; font-size: 11px; letter-spacing: 0.08em;
+}
+.pair__divider::before, .pair__divider::after {
+  content: ''; flex: 1 1 auto; height: 1px; background: rgba(255,255,255,0.12);
+}
+.pair__divider span { padding: 0 12px; }
+
+.pair__fields { display: flex; flex-direction: column; }
+.pair__fields > * + * { margin-top: 10px; }
+.pair__input {
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.09);
+  background: #070c10;
+  color: #dfe9ee;
+  /* 16px exactly: iOS zooms the whole page in on focus for anything smaller,
+     and the stage is a fixed 375px that must not be zoomed. */
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+  -webkit-appearance: none;
+}
+.pair__input:focus { border-color: rgba(var(--accent-rgb), 0.5); }
+
+.pair__foot { margin-top: auto; padding-top: 18px; flex: 0 0 auto; }
+.pair__status {
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 10px;
+  color: #7d8f9a; font-size: 12px; text-align: center;
+}
+.pair__status::before {
+  content: ''; width: 6px; height: 6px; margin-right: 8px;
+  border-radius: 50%; background: #f0c26a; flex: 0 0 auto;
+}
+.pair__status[data-state="bad"]::before { background: #e88b8b; }
+.pair__status[data-state="ok"]::before { background: #5ce6b8; }
+.pair__status[data-state="idle"] { display: none; }
+
+.pair__btn {
+  width: 100%; height: 46px;
+  border: 0; border-radius: 23px;
+  background: var(--accent);
+  color: #05161a;
+  font: inherit; font-size: 15px; font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pair__btn:disabled { opacity: 0.5; }
+.pair__btn--ghost {
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  color: var(--accent);
+  font-size: 14.5px; font-weight: 500;
+}
+.pair__btn + .pair__btn { margin-top: 10px; }
+
+/* --- 3d: paired ---------------------------------------------------------- */
+.pair__step--done { align-items: center; justify-content: center; text-align: center; padding: 0 8px; }
+.pair__tick {
+  width: 76px; height: 76px;
+  border-radius: 50%;
+  background: rgba(92,230,184,0.12);
+  border: 1px solid rgba(92,230,184,0.4);
+  display: flex; align-items: center; justify-content: center;
+  color: #5ce6b8; font-size: 30px;
+}
+.pair__step--done .pair__title { margin-top: 22px; }
+.pair__step--done .pair__foot { margin-top: 28px; width: 100%; max-width: 280px; }
 </style>
 </head>
 <body>
@@ -1238,6 +1395,71 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       <span class="deck__dot"></span>
     </div>
     <div class="deck__pills" id="deckPills"></div>
+  </div>
+
+  <!-- ------------------------------------------------------------- PAIRING -->
+  <!-- Hidden by default and shown by the module below only on first run, so a
+       configured install never sees it. -->
+  <div class="pair" id="pair" hidden role="dialog" aria-modal="true" aria-label="Pair with your computer">
+    <div class="pair__dots" id="pairDots" aria-hidden="true"><i data-on="true"></i><i></i><i></i></div>
+
+    <!-- 3c -->
+    <div class="pair__step" id="pairFind" data-active="true">
+      <h2 class="pair__title">Found a companion nearby</h2>
+      <p class="pair__sub" id="pairFindSub">A backend answered on this network. Confirm it’s yours.</p>
+      <div class="pair__found">
+        <div class="pair__found__icon" aria-hidden="true">💻</div>
+        <div class="pair__found__main">
+          <div class="pair__found__name" id="pairFoundName">This computer</div>
+          <div class="pair__found__meta" id="pairFoundMeta"></div>
+        </div>
+      </div>
+      <p class="pair__alt">not it? <button type="button" id="pairGoScan">scan a code instead</button></p>
+      <div class="pair__foot">
+        <div class="pair__status" id="pairFindStatus" data-state="idle"></div>
+        <button class="pair__btn" id="pairConfirm" type="button">Pair with this one</button>
+      </div>
+    </div>
+
+    <!-- 1d -->
+    <div class="pair__step" id="pairConnect">
+      <h2 class="pair__title">Point it at your computer</h2>
+      <p class="pair__sub">Open the dashboard on the PC running the backend and scan the code it shows.</p>
+      <div class="pair__scan" id="pairScan" data-live="false">
+        <video id="pairVideo" playsinline muted autoplay></video>
+        <div class="pair__scan__hint" id="pairScanHint">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#4dd8e6" stroke-width="1.4"
+               style="width:34px;height:34px;opacity:.75" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+            <path d="M14 14h3v3h-3zM20 14v3M17 20h4M14 20h1"></path>
+          </svg>
+          <div style="margin-top:10px">tap to scan the code<br>from the dashboard</div>
+        </div>
+      </div>
+      <div class="pair__divider"><span>OR TYPE IT</span></div>
+      <div class="pair__fields">
+        <input class="pair__input" id="pairUrl" type="url" inputmode="url" autocomplete="off"
+               autocapitalize="off" spellcheck="false" placeholder="http://192.168.1.20:8000" aria-label="Backend URL" />
+        <input class="pair__input" id="pairToken" type="text" autocomplete="off"
+               autocapitalize="off" spellcheck="false" placeholder="Access token" aria-label="Access token" />
+      </div>
+      <div class="pair__foot">
+        <div class="pair__status" id="pairStatus" data-state="idle"></div>
+        <button class="pair__btn" id="pairSubmit" type="button">Pair</button>
+      </div>
+    </div>
+
+    <!-- 3d -->
+    <div class="pair__step pair__step--done" id="pairDone">
+      <div class="pair__tick" aria-hidden="true">✓</div>
+      <h2 class="pair__title">Paired</h2>
+      <p class="pair__sub" id="pairDoneSub">Connected. This device will reconnect automatically from now on.</p>
+      <div class="pair__foot">
+        <button class="pair__btn pair__btn--ghost" id="pairContinue" type="button">Continue</button>
+      </div>
+    </div>
   </div>
 
   <div class="retry" id="retry" data-visible="false" role="status">
@@ -1399,7 +1621,12 @@ window.CompanionConfig = (function () {
     city: '',
     /* Must match COMPANION_TOKEN in backend/.env. Without it every request
        comes back 401 once the backend has a token set. */
-    token: ''
+    token: '',
+    /* Whether the pairing flow has been completed. Tracked separately from
+       `token` because a backend with no COMPANION_TOKEN set is legitimately
+       paired with an empty one — keying the first-run screen off the token
+       would strand those users on it forever. */
+    paired: false
   };
   var listeners = [];
   var state;
@@ -1415,7 +1642,13 @@ window.CompanionConfig = (function () {
         sleepNow: !!parsed.sleepNow,
         voice: typeof parsed.voice === 'boolean' ? parsed.voice : DEFAULTS.voice,
         city: typeof parsed.city === 'string' ? parsed.city : DEFAULTS.city,
-        token: typeof parsed.token === 'string' ? parsed.token : DEFAULTS.token
+        token: typeof parsed.token === 'string' ? parsed.token : DEFAULTS.token,
+        /* Anyone upgrading already has a working backendUrl, so treat a
+           configured install as paired rather than interrupting it with a
+           first-run screen it does not need. */
+        paired: typeof parsed.paired === 'boolean'
+          ? parsed.paired
+          : !!(parsed && parsed.backendUrl)
       };
     } catch (e) {
       /* Private mode or a corrupt value: fall back rather than fail to boot. */
@@ -3715,6 +3948,330 @@ window.CompanionVoice = (function () {
   setInterval(tick(loadDevices), LIST_INTERVAL);
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) refreshAll();
+  });
+})();
+
+/* ===========================================================================
+   PAIRING — first run: discover, scan or type, confirm (mockups 3c, 1d, 3d).
+
+   Replaces typing a LAN IP on a 4-inch keyboard. Discovery does most of the
+   work: this file is SERVED BY the computer running the backend, so
+   location.hostname already IS the address we are looking for and /health is
+   auth-exempt, which is enough to confirm something is listening before the
+   user touches anything.
+   ========================================================================= */
+(function () {
+  'use strict';
+
+  var BACKEND_PORT = 8000;
+  var PROBE_TIMEOUT_MS = 4000;
+  var SCAN_INTERVAL_MS = 250;
+  /* Downscaled frames: a 6s decodes a 320px-wide grab comfortably, and the
+     full sensor resolution buys no accuracy at this distance. */
+  var SCAN_WIDTH = 320;
+
+  var cfg = window.CompanionConfig;
+  var root = document.getElementById('pair');
+  var dots = document.getElementById('pairDots').children;
+  var steps = {
+    find: document.getElementById('pairFind'),
+    connect: document.getElementById('pairConnect'),
+    done: document.getElementById('pairDone')
+  };
+  var urlInput = document.getElementById('pairUrl');
+  var tokenInput = document.getElementById('pairToken');
+  var status = document.getElementById('pairStatus');
+  var findStatus = document.getElementById('pairFindStatus');
+  var scanBox = document.getElementById('pairScan');
+  var video = document.getElementById('pairVideo');
+  var submitBtn = document.getElementById('pairSubmit');
+  var confirmBtn = document.getElementById('pairConfirm');
+
+  var candidate = null;
+  var stream = null;
+  var scanTimer = null;
+  var canvas = null;
+
+  /* --- helpers ---------------------------------------------------------- */
+
+  function show(name, stepIndex) {
+    for (var k in steps) {
+      if (Object.prototype.hasOwnProperty.call(steps, k)) {
+        steps[k].setAttribute('data-active', k === name ? 'true' : 'false');
+      }
+    }
+    for (var i = 0; i < dots.length; i++) {
+      dots[i].setAttribute('data-on', i <= stepIndex ? 'true' : 'false');
+    }
+    if (name !== 'connect') stopCamera();
+  }
+
+  function say(el, text, state) {
+    el.textContent = text || '';
+    el.setAttribute('data-state', text ? (state || 'warn') : 'idle');
+  }
+
+  /* Only http(s) may be paired. Without this a scanned "javascript:..." or
+     "file:..." payload would be written straight into the backend URL that
+     every later request is built from. */
+  function safeBackendUrl(value) {
+    var raw = String(value || '').trim().replace(/\/+$/, '');
+    if (!raw) return null;
+    if (!/^https?:\/\//i.test(raw)) return null;
+    try {
+      var u = new URL(raw);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      if (!u.hostname) return null;
+      return u.origin;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function fetchWithTimeout(url, options, ms) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var opts = options || {};
+    if (controller) opts.signal = controller.signal;
+    var timer = setTimeout(function () { if (controller) controller.abort(); }, ms);
+    return fetch(url, opts).then(function (res) {
+      clearTimeout(timer);
+      return res;
+    }, function (err) {
+      clearTimeout(timer);
+      throw err;
+    });
+  }
+
+  /* --- discovery (3c) --------------------------------------------------- */
+
+  function guessBackend() {
+    if (!window.location || !window.location.hostname) return null;
+    var host = window.location.hostname;
+    /* file:// gives an empty host; a page opened from disk cannot guess. */
+    if (!host) return null;
+    return window.location.protocol + '//' + host + ':' + BACKEND_PORT;
+  }
+
+  function discover() {
+    candidate = guessBackend();
+    if (!candidate) return toConnect('');
+    say(findStatus, 'looking for a backend on this network…', 'warn');
+    return fetchWithTimeout(candidate + '/health', {}, PROBE_TIMEOUT_MS)
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (health) {
+        if (!health) throw new Error('no backend');
+        document.getElementById('pairFoundName').textContent =
+          window.location.hostname;
+        document.getElementById('pairFoundMeta').textContent =
+          [candidate.replace(/^https?:\/\//, ''), health.model].filter(Boolean).join(' · ');
+        say(findStatus, '', 'idle');
+        show('find', 0);
+      })
+      .catch(function () {
+        /* Nothing answered: skip the confirm screen rather than asking the
+           user to confirm a machine we never reached. */
+        toConnect(candidate || '');
+      });
+  }
+
+  function toConnect(prefillUrl) {
+    if (prefillUrl && !urlInput.value) urlInput.value = prefillUrl;
+    show('connect', 1);
+  }
+
+  /* --- pairing attempt --------------------------------------------------- */
+
+  /* /health is auth-exempt, so reaching it proves nothing about the token.
+     /reminders is the cheapest authenticated GET, and its 401 is the only
+     reliable signal that credentials are actually required. */
+  function verify(url, token) {
+    var headers = {};
+    if (token) headers['X-Companion-Token'] = token;
+    return fetchWithTimeout(url + '/reminders', { headers: headers }, PROBE_TIMEOUT_MS)
+      .then(function (res) {
+        if (res.ok) return { ok: true };
+        if (res.status === 401) return { ok: false, reason: 'auth' };
+        return { ok: false, reason: 'http ' + res.status };
+      })
+      .catch(function () { return { ok: false, reason: 'unreachable' }; });
+  }
+
+  function finish(url, token) {
+    /* set() is (key, value), one at a time — it is not an object merge. */
+    cfg.set('backendUrl', url);
+    cfg.set('token', token);
+    cfg.set('paired', true);
+    document.getElementById('pairDoneSub').textContent =
+      'Connected to ' + url.replace(/^https?:\/\//, '') +
+      '. This device will reconnect automatically from now on.';
+    show('done', 2);
+  }
+
+  confirmBtn.addEventListener('click', function () {
+    if (!candidate) return toConnect('');
+    confirmBtn.disabled = true;
+    say(findStatus, 'checking…', 'warn');
+    verify(candidate, cfg.get('token')).then(function (r) {
+      confirmBtn.disabled = false;
+      if (r.ok) return finish(candidate, cfg.get('token'));
+      if (r.reason === 'auth') {
+        /* Found the machine but it wants a token — carry the URL forward so
+           only the secret is left to supply. */
+        urlInput.value = candidate;
+        toConnect(candidate);
+        say(status, 'That computer needs an access token. Scan the dashboard’s code, or paste it.', 'warn');
+        return;
+      }
+      say(findStatus, 'Could not reach it (' + r.reason + ').', 'bad');
+    });
+  });
+
+  document.getElementById('pairGoScan').addEventListener('click', function () {
+    toConnect(candidate || '');
+  });
+
+  submitBtn.addEventListener('click', function () {
+    var url = safeBackendUrl(urlInput.value);
+    if (!url) {
+      say(status, 'Enter a full address, like http://192.168.1.20:8000', 'bad');
+      urlInput.focus();
+      return;
+    }
+    var token = String(tokenInput.value || '').trim();
+    submitBtn.disabled = true;
+    say(status, 'connecting…', 'warn');
+    verify(url, token).then(function (r) {
+      submitBtn.disabled = false;
+      if (r.ok) return finish(url, token);
+      if (r.reason === 'auth') {
+        say(status, 'That token was rejected.', 'bad');
+        tokenInput.focus();
+        return;
+      }
+      say(status, r.reason === 'unreachable'
+        ? 'No answer from ' + url.replace(/^https?:\/\//, '') + '.'
+        : 'The backend answered with ' + r.reason + '.', 'bad');
+    });
+  });
+
+  document.getElementById('pairContinue').addEventListener('click', function () {
+    stopCamera();
+    root.hidden = true;
+    /* A reload is the honest way to apply this: the SSE stream, the poller and
+       the deck all captured the old (unpaired) settings when they started, and
+       restarting the page is far less error-prone than re-initialising each. */
+    window.location.reload();
+  });
+
+  /* --- camera + decode (1d) ---------------------------------------------- */
+
+  function loadDecoder() {
+    if (window.jsQR) return Promise.resolve(window.jsQR);
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      /* Same origin as this page — it is served by serve_frontend.py, which
+         must list /jsqr.js in ALLOWED_PATHS or this 404s. */
+      s.src = 'jsqr.js';
+      s.onload = function () { resolve(window.jsQR); };
+      s.onerror = function () { reject(new Error('decoder unavailable')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function stopCamera() {
+    if (scanTimer !== null) { clearInterval(scanTimer); scanTimer = null; }
+    if (stream) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null;
+    }
+    scanBox.setAttribute('data-live', 'false');
+  }
+
+  function startCamera() {
+    if (stream) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      say(status, 'This browser cannot open the camera. Type the address instead.', 'bad');
+      return;
+    }
+    say(status, 'starting the camera…', 'warn');
+    Promise.all([
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }, audio: false
+      }),
+      loadDecoder()
+    ]).then(function (results) {
+      stream = results[0];
+      video.srcObject = stream;
+      var play = video.play();
+      if (play && play.catch) play.catch(function () {});
+      scanBox.setAttribute('data-live', 'true');
+      say(status, 'point it at the code on the dashboard', 'warn');
+      scanTimer = setInterval(tickScan, SCAN_INTERVAL_MS);
+    }).catch(function (err) {
+      /* getUserMedia needs a secure context: over plain http on a LAN IP the
+         camera is blocked outright, and saying so beats a dead button. */
+      var insecure = window.location.protocol !== 'https:'
+        && window.location.hostname !== 'localhost'
+        && window.location.hostname !== '127.0.0.1';
+      say(status, insecure
+        ? 'The camera needs HTTPS. Open this page over https, or type the address below.'
+        : 'Camera unavailable (' + (err && err.name ? err.name : 'error') + '). Type the address instead.',
+        'bad');
+    });
+  }
+
+  function tickScan() {
+    if (!stream || !window.jsQR) return;
+    if (!video.videoWidth) return;
+    if (!canvas) canvas = document.createElement('canvas');
+    var scale = SCAN_WIDTH / video.videoWidth;
+    canvas.width = SCAN_WIDTH;
+    canvas.height = Math.round(video.videoHeight * scale);
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    var image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var found = window.jsQR(image.data, image.width, image.height, {
+      inversionAttempts: 'dontInvert'
+    });
+    if (found && found.data) accept(found.data);
+  }
+
+  function accept(text) {
+    var payload;
+    try { payload = JSON.parse(text); } catch (e) { payload = null; }
+    if (!payload || payload.v !== 1) {
+      say(status, 'That code is not a companion pairing code.', 'bad');
+      return;
+    }
+    var url = safeBackendUrl(payload.url);
+    if (!url) {
+      say(status, 'That code carries an address this app will not open.', 'bad');
+      return;
+    }
+    stopCamera();
+    urlInput.value = url;
+    tokenInput.value = typeof payload.token === 'string' ? payload.token : '';
+    /* Deliberately NOT auto-paired. A QR is untrusted input that sets the
+       server every later request is sent to, so the address it carries is put
+       on screen and the user taps Pair to accept it. */
+    say(status, 'Scanned ' + url.replace(/^https?:\/\//, '') + ' — tap Pair to confirm.', 'ok');
+  }
+
+  scanBox.addEventListener('click', startCamera);
+
+  /* --- entry ------------------------------------------------------------- */
+
+  if (!cfg.get('paired')) {
+    root.hidden = false;
+    show('find', 0);
+    discover();
+  }
+
+  /* Leaving the page mid-scan must release the camera, or iOS keeps the
+     indicator lit and the track open. */
+  window.addEventListener('pagehide', stopCamera);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopCamera();
   });
 })();
 </script>
