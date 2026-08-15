@@ -124,11 +124,17 @@ data is stored under `backend/data/` and is ignored by Git.
 Machine-specific values live in `firmware/wake_esp32s3/config.h` (gitignored):
 
 1. Copy `config.h.example` to `config.h` and fill in `WIFI_SSID`,
-   `WIFI_PASSWORD`, `BACKEND_HOST` (your computer's LAN IP) and
-   `BACKEND_TOKEN` (same value as `COMPANION_TOKEN` above).
+   `WIFI_PASSWORD`, `BACKEND_HOST` (your computer's LAN IP),
+   `BACKEND_TOKEN` (same value as `COMPANION_TOKEN` above) and
+   `BACKEND_CA_CERT` (the contents of `certs/companion-ca.crt`, verbatim).
 2. Open `firmware/wake_esp32s3/wake_esp32s3.ino` in the Arduino IDE, select the
    ESP32-S3 board, and flash. The sketch refuses to compile until `config.h`
    exists, so a half-configured board cannot be flashed silently.
+
+The board wakes the backend over HTTPS, trusting the CA cert embedded in
+`config.h`. Regenerating the CA chain (see the certs section above) therefore
+requires updating `BACKEND_CA_CERT` and reflashing the board — the sketch
+cannot otherwise trust the new certificate.
 
 ## Notes
 
