@@ -68,6 +68,15 @@ context, so for the phone they need HTTPS:
    General > VPN & Device Management, or install the profile from a page
    served over the LAN).
 3. Open `https://<computer-LAN-IP>:8443/companion.html` on the phone. `start-servers.ps1` picks HTTPS automatically when `certs/companion-server.crt` exists.
+4. The backend must use the same scheme: iOS blocks fetch/EventSource to a
+   plain-HTTP backend from an HTTPS page (mixed content). `start-servers.ps1`
+   runs uvicorn with the same cert chain when it exists — set the phone's
+   **Backend URL** to `https://<computer-LAN-IP>:8000`. Manually:
+
+   ```powershell
+   uvicorn app.main:app --host 0.0.0.0 --port 8000 `
+     --ssl-keyfile certs\companion-server.key --ssl-certfile certs\companion-server.crt
+   ```
 
 ### Local HTTPS certs
 

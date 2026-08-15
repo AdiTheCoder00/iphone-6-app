@@ -9,6 +9,10 @@ firmware/wake_esp32s3/config.h
 .DS_Store
 Thumbs.db
 
+# Runtime state written by start-servers.ps1 (scheme/port the last run chose).
+.backend-scheme
+.frontend-port
+
 # Dashboard (React/Vite): dependencies and build output are both reproducible
 # from package.json + `npm run build`, so neither belongs in the repo.
 node_modules/

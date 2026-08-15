@@ -6,8 +6,16 @@
 # The frontend is served through serve_frontend.py, which only serves the
 # PWA's own files (never certs/ or backend/). HTTPS on 8443 is used when the
 # local cert chain exists - that is what unlocks tap-to-talk and the service
-# worker on iOS - and plain HTTP on 8080 otherwise. Logs are written next to
-# this script so a crash is never silent.
+# worker on iOS - and plain HTTP on 8080 otherwise. The backend follows the
+# same rule: HTTPS on 8000 when the cert exists (iOS blocks fetch/EventSource
+# to a plain-HTTP backend from an HTTPS page as mixed content), plain HTTP
+# otherwise.
+#
+# Cert state can change between runs (certs generated or removed). Instances
+# started on the previous scheme/port would keep serving a stale origin, so
+# this script records what it started in .frontend-port and .backend-scheme
+# and stops the stale instance before starting the new one. Instances it did
+# not start (no marker, or a process that is not python) are left alone.
 $ErrorActionPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -29,29 +37,87 @@ function Test-PortListening([int]$port) {
   return ($null -ne $conn)
 }
 
-if (-not (Test-PortListening 8000)) {
+$cert = Join-Path $root 'certs\companion-server.crt'
+$hasCert = Test-Path $cert
+
+# --- backend ---
+$scheme = 'http'
+if ($hasCert) {
+  $scheme = 'https'
+  $key = Join-Path $root 'certs\companion-server.key'
+}
+
+$backendSchemeMarker = Join-Path $root '.backend-scheme'
+$previousScheme = $null
+if (Test-Path $backendSchemeMarker) {
+  $previousScheme = (Get-Content $backendSchemeMarker).Trim()
+}
+
+$backendRunning = Test-PortListening 8000
+if ($backendRunning -and $previousScheme -and $previousScheme -ne $scheme) {
+  # The cert state changed since we last started the backend; the old
+  # instance is still serving the wrong scheme and would keep the phone
+  # on the mixed-content failure path until a reboot.
+  $conn = Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object -First 1
+  $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+  if ($proc -and $proc.ProcessName -match 'python') {
+    Stop-Process -Id $proc.Id -Force
+    $backendRunning = $false
+    Write-Host "Stopped stale backend (was $previousScheme, now $scheme)"
+  }
+}
+
+if (-not $backendRunning) {
+  # A single string: PS 5.1's Start-Process -ArgumentList strips embedded
+  # quotes from array elements, which would split the cert paths at spaces.
+  $backendArgs = '-m uvicorn app.main:app --host 0.0.0.0 --port 8000'
+  if ($hasCert) {
+    $backendArgs += ' --ssl-keyfile "' + $key + '" --ssl-certfile "' + $cert + '"'
+  }
   Start-Process -FilePath $python `
-    -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', '8000' `
+    -ArgumentList $backendArgs `
     -WorkingDirectory "$root\backend" -WindowStyle Hidden `
     -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr
-  Write-Host "Started backend on :8000"
+  Set-Content -Path $backendSchemeMarker -Value $scheme
+  Write-Host "Started backend on :8000 ($scheme)"
 } else {
   Write-Host "Backend already listening on :8000 - skipped"
 }
 
-$cert = Join-Path $root 'certs\companion-server.crt'
+# --- frontend ---
 $frontPort = 8443
-if (Test-Path $cert) {
-  $frontArgs = @('serve_frontend.py', '--port', '8443', '--cert-dir', 'certs')
+if ($hasCert) {
+  $frontArgs = 'serve_frontend.py --port 8443 --cert-dir certs'
 } else {
   $frontPort = 8080
-  $frontArgs = @('serve_frontend.py', '--port', '8080')
+  $frontArgs = 'serve_frontend.py --port 8080'
 }
-if (-not (Test-PortListening $frontPort)) {
+
+$frontPortMarker = Join-Path $root '.frontend-port'
+$previousPort = $null
+if (Test-Path $frontPortMarker) {
+  $previousPort = (Get-Content $frontPortMarker).Trim()
+  if ($previousPort -notmatch '^\d+$') { $previousPort = $null }
+}
+
+$frontRunning = Test-PortListening $frontPort
+if (-not $frontRunning -and $previousPort -and $previousPort -ne $frontPort -and (Test-PortListening $previousPort)) {
+  # Same stale-origin problem as the backend: an instance on the old port
+  # would keep serving a plain-HTTP app with no service worker or mic.
+  $conn = Get-NetTCPConnection -LocalPort $previousPort -State Listen | Select-Object -First 1
+  $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+  if ($proc -and $proc.ProcessName -match 'python') {
+    Stop-Process -Id $proc.Id -Force
+    Write-Host "Stopped stale frontend on :$previousPort (port changed to :$frontPort)"
+  }
+}
+
+if (-not $frontRunning) {
   Start-Process -FilePath $python `
     -ArgumentList $frontArgs `
     -WorkingDirectory $root -WindowStyle Hidden `
     -RedirectStandardOutput $frontOut -RedirectStandardError $frontErr
+  Set-Content -Path $frontPortMarker -Value $frontPort
   Write-Host "Started frontend on :$frontPort"
 } else {
   Write-Host "Frontend already listening on :$frontPort - skipped"

@@ -11,16 +11,6 @@ from pathlib import Path
 
 import httpx
 
-# Route ALL TLS verification through the OS trust store, before anything that
-# opens a connection is imported. services/tools.py builds its own context for
-# the same reason, but third-party libraries construct their own — notably
-# huggingface_hub, which downloads the Whisper weights and otherwise fails on
-# the same incomplete-chain problem. Patching the stdlib covers every caller.
-# Verification stays on; only the source of trusted roots changes.
-import truststore
-
-truststore.inject_into_ssl()
-
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
