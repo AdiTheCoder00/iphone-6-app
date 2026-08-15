@@ -463,14 +463,17 @@ def find_files(name: str) -> list[str]:
         raise PCControlError("find_files needs a name")
     # -like treats [ as a wildcard class; escape it so a literal bracket in
     # the query matches itself. * and ? in the query stay wildcards, which is
-    # what someone searching for "report 202*" wants.
+    # what someone searching for "report 202*" wants. The whole pattern is
+    # then embedded with _ps_literal — a single quote in the name must not
+    # break out of the PowerShell literal ('' doubling is the escape).
     pattern = name.replace("[", "`[").replace("]", "`]")
+    literal = _ps_literal("*" + pattern + "*")
     script = (
         "$hits = @();"
         "Get-ChildItem -Path "
         + ",".join(_FILE_SEARCH_ROOTS)
         + " -Recurse -File -Force -ErrorAction SilentlyContinue | "
-        f"Where-Object {{ $_.Name -like '*{pattern}*' }} | "
+        f"Where-Object {{ $_.Name -like {literal} }} | "
         f"Select-Object -First {_SEARCH_MAX_RESULTS} | "
         "ForEach-Object { $hits += $_.FullName };"
         "$hits -join \"`n\""

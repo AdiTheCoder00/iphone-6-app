@@ -15,7 +15,7 @@
 /* Bump this version whenever the shell changes — the browser only checks for
  * a new service worker script on navigation, and an unchanged sw.js can keep
  * a stale companion.html in play for a long time on iOS. */
-const CACHE = 'companion-shell-v2';
+const CACHE = 'companion-shell-v3';
 
 /* Only the shell. API calls live on a different origin and must never be
  * served from cache — a stale reply or a stale reminder would be worse than
@@ -23,16 +23,20 @@ const CACHE = 'companion-shell-v2';
 const SHELL = [
   'companion.html',
   'manifest.json',
+  'qrcode.js',
   'icons/icon-180.png',
   'icons/icon-192.png',
-  'icons/icon-512.png'
+  'icons/icon-512.png',
+  'icons/icon-maskable-512.png'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      /* Individually, so one missing file cannot fail the whole install. */
-      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(url))))
+      /* Individually, so one missing file cannot fail the whole install.
+         Promise.allSettled would be nicer but does not exist in iOS 12
+         Safari, which is the primary target here. */
+      .then((cache) => Promise.all(SHELL.map((url) => cache.add(url).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });

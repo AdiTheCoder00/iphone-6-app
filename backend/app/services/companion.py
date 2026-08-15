@@ -811,4 +811,13 @@ async def describe_image(image_base64: str) -> str:
     return one_line(text)
 
 
+def one_line(text: str) -> str:
+    """Collapse runs of whitespace into single spaces and strip.
+
+    Ollama answers can carry newlines and odd spacing; a one-line description
+    renders cleanly in the phone's bubble.
+    """
+    return re.sub(r"\s+", " ", text).strip()
+
+
 companion_service = CompanionService()

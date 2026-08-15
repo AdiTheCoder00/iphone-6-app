@@ -116,10 +116,18 @@ class CompanionHandler(SimpleHTTPRequestHandler):
             return False
 
         rel = path[len("/dashboard/"):]
-        if ".." in rel.split("/"):
+        # On Windows both / and \ separate paths, and a drive-qualified
+        # segment (C:/...) resolves absolutely; either would escape the dist
+        # directory. Reject both outright — nothing in the build output needs
+        # them. The resolve()+is_relative_to check is the final containment
+        # guarantee for anything that slips through.
+        if "\\" in rel or ":" in rel or ".." in rel.split("/"):
             self.send_error(404, "Not in the dashboard whitelist")
             return True
-        target = DASHBOARD_DIR / rel
+        target = (DASHBOARD_DIR / rel).resolve()
+        if not target.is_relative_to(DASHBOARD_DIR.resolve()):
+            self.send_error(404, "Not in the dashboard whitelist")
+            return True
         if target.is_file():
             self._send_file(target, "public, max-age=86400")
             return True

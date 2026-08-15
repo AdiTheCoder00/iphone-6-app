@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import tempfile
 import time
 import uuid
@@ -64,6 +65,26 @@ from app.services.transcription import TranscriptionError, transcription_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class _TokenRedactingFilter(logging.Filter):
+    """Keep the shared secret out of access logs.
+
+    /events accepts the token as a query parameter (EventSource cannot set
+    headers), so uvicorn's access log would otherwise write it verbatim —
+    and those logs live next to the repo on disk.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        request_line = getattr(record, "request_line", None)
+        if isinstance(request_line, str):
+            record.request_line = re.sub(
+                r"([?&]token=)[^&\s]+", r"\1<redacted>", request_line
+            )
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
 # Proxies and mobile radios drop idle connections; a periodic comment line
 # keeps the SSE stream alive without emitting a real event.
@@ -558,9 +579,15 @@ async def events(request: Request):
             # Guarded so a transient store error churns the reconnect instead
             # of killing the stream outright.
             try:
-                events, _power = await asyncio.to_thread(reminder_service.check_reminders)
+                events, power_actions = await asyncio.to_thread(reminder_service.check_reminders)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
+                # Rows claimed here are marked fired and will not be picked up
+                # by the poll loop — execute them now, exactly as that loop
+                # would, so a scheduled shutdown due during downtime actually
+                # happens instead of being silently dropped.
+                for row in power_actions:
+                    await reminder_service._run_power_action(row)
             except Exception as e:
                 logger.warning("Reminder check on connect failed: %s", e, exc_info=True)
             while True:
