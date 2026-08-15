@@ -47,6 +47,7 @@
  * ======================================================================== */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ESP_I2S.h>
 
