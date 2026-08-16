@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # Ceiling on an uploaded clip. The frontend caps recording at 15s, so this
     # only ever rejects something that did not come from it.
     max_audio_mb: int = Field(10, ge=1, le=100, validation_alias="MAX_AUDIO_MB")
+    # Ceiling on an uploaded image. Separate from max_audio_mb: a photo is
+    # megabytes before base64, and the two caps are not the same policy.
+    max_image_mb: int = Field(10, ge=1, le=100, validation_alias="MAX_IMAGE_MB")
 
     # Text-to-speech (kokoro-onnx, local CPU). Model files (~350 MB) live in
     # TTS_MODEL_DIR and download on first use if absent.

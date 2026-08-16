@@ -15,7 +15,7 @@
 /* Bump this version whenever the shell changes — the browser only checks for
  * a new service worker script on navigation, and an unchanged sw.js can keep
  * a stale companion.html in play for a long time on iOS. */
-const CACHE = 'companion-shell-v7';
+const CACHE = 'companion-shell-v8';
 
 /* Only the shell. API calls live on a different origin and must never be
  * served from cache — a stale reply or a stale reminder would be worse than
@@ -24,6 +24,10 @@ const SHELL = [
   'companion.html',
   'manifest.json',
   'qrcode.js',
+  /* jsqr.js is loaded on demand by the pairing screen; precaching it keeps
+     the scanner working through a Wi-Fi blip that would otherwise land on
+     the "decoder unavailable" fallback. */
+  'jsqr.js',
   'icons/icon-180.png',
   'icons/icon-192.png',
   'icons/icon-512.png',
@@ -93,6 +97,16 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => caches.match(request).then((hit) => hit || Response.error()))
+      .catch(() => caches.match(request).then((hit) => {
+        /* Navigation requests: the server 302s `/` to companion.html, and
+           that redirect target is never fetched by the worker itself, so
+           offline the match would come up empty and the app would show a
+           browser error page instead of the cached shell. */
+        if (hit) return hit;
+        if (request.mode === 'navigate') {
+          return caches.match('companion.html');
+        }
+        return Response.error();
+      }))
   );
 });

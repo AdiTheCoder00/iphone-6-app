@@ -122,6 +122,38 @@ def lock_screen() -> None:
 _PLAYBACK_STATUS = {0: "closed", 1: "opened", 2: "changing", 3: "stopped", 4: "playing", 5: "paused"}
 
 
+def _now_playing_sync() -> dict | None:
+    """Blocking now-playing probe, run on a worker thread.
+
+    winsdk's async operations need an event loop on the calling thread and its
+    COM objects need a COM-initialised thread — neither exists on FastAPI's
+    event loop thread (and running a *second* asyncio loop on it is illegal).
+    So the probe gets its own short-lived loop on a worker thread; winsdk
+    initialises COM itself on import.
+    """
+    import asyncio
+    import winsdk.windows.media.control as wmc
+
+    async def _probe() -> dict | None:
+        manager = await wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+        session = manager.get_current_session()
+        if session is None:
+            return None
+        info = await session.try_get_media_properties_async()
+        playback = session.get_playback_info()
+        return {
+            "title": info.title or "",
+            "artist": info.artist or "",
+            "app": session.source_app_user_model_id or "",
+            "status": _PLAYBACK_STATUS.get(playback.playback_status, "unknown"),
+        }
+
+    try:
+        return asyncio.run(_probe())
+    except Exception as e:
+        raise PCControlError(f"could not read the media session ({e})") from e
+
+
 async def now_playing() -> dict | None:
     """The track the OS thinks is currently active, if any.
 
@@ -132,21 +164,7 @@ async def now_playing() -> dict | None:
     outcome, not a failure.
     """
     _require_windows()
-    import winsdk.windows.media.control as wmc
-
-    manager = await wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
-    session = manager.get_current_session()
-    if session is None:
-        return None
-
-    info = await session.try_get_media_properties_async()
-    playback = session.get_playback_info()
-    return {
-        "title": info.title or "",
-        "artist": info.artist or "",
-        "app": session.source_app_user_model_id or "",
-        "status": _PLAYBACK_STATUS.get(playback.playback_status, "unknown"),
-    }
+    return await asyncio.to_thread(_now_playing_sync)
 
 
 # --- system stats -------------------------------------------------------------

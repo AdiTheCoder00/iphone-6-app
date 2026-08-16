@@ -14,10 +14,23 @@ interface Props {
 export function SettingsBar({ settings, onSave, open, onOpenChange }: Props) {
   const [backendUrl, setBackendUrl] = useState(settings.backendUrl);
   const [token, setToken] = useState(settings.token);
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   const save = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({ backendUrl: backendUrl.trim(), token: token.trim() });
+    const url = backendUrl.trim();
+    /* A malformed URL fails later with an opaque fetch TypeError; catch it
+     * here and say which field is wrong. */
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error();
+      if (!parsed.hostname) throw new Error();
+    } catch {
+      setUrlError('Enter a full address, like https://192.168.1.20:8000');
+      return;
+    }
+    setUrlError(null);
+    onSave({ backendUrl: url, token: token.trim() });
     onOpenChange(false);
   };
 
@@ -58,6 +71,7 @@ export function SettingsBar({ settings, onSave, open, onOpenChange }: Props) {
       <button type="submit" className="btn">
         Save
       </button>
+      {urlError ? <p className="error">{urlError}</p> : null}
     </form>
   );
 }

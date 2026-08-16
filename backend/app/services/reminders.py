@@ -77,6 +77,28 @@ class ReminderService:
     def pending(self) -> list[dict]:
         return store.pending_reminders()
 
+    def reconcile(self) -> int:
+        """Re-arm reminders claimed by a process that died mid-delivery.
+
+        mark_fired then publish is a few instructions wide, but a hard crash
+        in that window (or during the SSE connect path's claim) would
+        otherwise leave the row fired with no delivered flag and nothing ever
+        send it again. Called once at startup, before the poller starts, so
+        every re-armed row is picked up by the next scan.
+        """
+        rearmed = 0
+        for row in store.stale_claimed():
+            if store.rearm_reminder(row["id"]):
+                rearmed += 1
+                logger.warning(
+                    "Re-armed reminder %d lost to a crash before delivery: %s",
+                    row["id"],
+                    row["text"],
+                )
+        if rearmed:
+            logger.info("Startup reconciliation re-armed %d reminder(s)", rearmed)
+        return rearmed
+
     def cancel(self, reminder_id: int) -> bool:
         cancelled = store.delete_reminder(reminder_id)
         if cancelled:
@@ -134,6 +156,9 @@ class ReminderService:
         for reminder in due:
             if now - reminder["fire_time"] > MAX_LATE_SECONDS:
                 if store.mark_fired(reminder["id"]):
+                    # Terminal, like delivery: this row must never be picked up
+                    # by the startup reconciliation and re-fired.
+                    store.mark_delivered(reminder["id"])
                     logger.info(
                         "Reminder %d retired unsent (%.1fh late): %s",
                         reminder["id"],
@@ -154,21 +179,35 @@ class ReminderService:
             fresh = []
 
         fired = []
-        for reminder in fresh + power:
-            # Claim before returning: if the claim loses a race, another
-            # caller already sent this one and we must not send it twice.
-            if store.mark_fired(reminder["id"]):
-                if reminder.get("repeat"):
-                    store.rearm_recurring(
-                        reminder["id"], reminder["repeat"], reminder["fire_time"]
-                    )
-                    logger.info(
-                        "Reminder %d fired and re-armed (%s): %s",
+        try:
+            for reminder in fresh + power:
+                # Claim before returning: if the claim loses a race, another
+                # caller already sent this one and we must not send it twice.
+                if store.mark_fired(reminder["id"]):
+                    if reminder.get("repeat"):
+                        store.rearm_recurring(
+                            reminder["id"], reminder["repeat"], reminder["fire_time"]
+                        )
+                        logger.info(
+                            "Reminder %d fired and re-armed (%s): %s",
+                            reminder["id"],
+                            reminder["repeat"],
+                            reminder["text"],
+                        )
+                    fired.append(reminder)
+        except Exception as e:
+            # A mid-scan failure (DB lock, disk error) must not leave the rows
+            # claimed so far marked fired forever with nobody to deliver them:
+            # re-arm everything claimed in this scan, then let the error
+            # propagate so the poll loop can log it and try again next tick.
+            for reminder in fired:
+                if store.unmark_fired(reminder["id"]):
+                    logger.warning(
+                        "Re-armed reminder %d after failed claim scan: %s",
                         reminder["id"],
-                        reminder["repeat"],
-                        reminder["text"],
+                        e,
                     )
-                fired.append(reminder)
+            raise
 
         events = [r for r in fired if not r.get("power_action")]
         power_actions = [r for r in fired if r.get("power_action")]
@@ -226,6 +265,9 @@ class ReminderService:
                 events, power_actions = await asyncio.shield(claim_task)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
+                    # Delivered on this loop: the flag is what lets a later
+                    # startup tell "sent" from "claimed but lost".
+                    store.mark_delivered(fired["id"])
                     logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
                 published = {r["id"] for r in events}
                 for row in power_actions:

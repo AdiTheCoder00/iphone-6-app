@@ -368,9 +368,9 @@ def parse_model_output(raw: str) -> tuple[str, str]:
 
     reply = _normalize_reply(payload.get("reply"))
     if not reply:
-        # Valid JSON, empty/missing reply — the cleaned text is still better
-        # than nothing only if it isn't just the JSON envelope itself.
-        reply = "" if payload else _normalize_reply(cleaned)
+        # Valid JSON with an empty/missing reply — the cleaned text is still
+        # better than nothing only if it isn't just the JSON envelope itself.
+        reply = _normalize_reply(cleaned)
     return reply, _normalize_emotion(payload.get("emotion"))
 
 
@@ -841,7 +841,16 @@ async def describe_image(image_base64: str) -> str:
         raise CompanionUnavailable(
             f"Ollama returned {response.status_code} for the vision request"
         )
-    message = (response.json() or {}).get("message") or {}
+    try:
+        data = response.json()
+    except ValueError as e:
+        # Same treatment as _post_chat's envelope check: a 200 with non-JSON
+        # body (proxy, different API version) must surface as a typed failure,
+        # not a JSONDecodeError escaping into a generic 500 at the route.
+        raise CompanionUnavailable("Ollama returned an unreadable response") from e
+    if not isinstance(data, dict):
+        raise CompanionUnavailable("Ollama returned an unreadable response")
+    message = data.get("message") or {}
     text = (message.get("content") or "").strip()
     if not text:
         raise CompanionUnavailable("Vision model returned an empty description")

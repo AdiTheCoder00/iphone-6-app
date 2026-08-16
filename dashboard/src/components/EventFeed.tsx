@@ -28,10 +28,17 @@ export function EventFeed({ events, connected, failed }: Props) {
       empty={events.length === 0}
       emptyText="Nothing yet — reminders, wake triggers and unprompted messages appear here as they happen."
     >
-      {/* New events are announcements: read them out when they arrive. */}
-      <ul className="rows" aria-live="polite">
-        {events.map((e) => (
-          <li key={e.id} className="row">
+      {/* Only the newest event (index 0 — events are prepended) is a live
+          announcement. The list can hold 50 items, and a live region reads
+          everything inside it on mount — the whole backlog would be read out
+          on every connect. */}
+      <ul className="rows">
+        {events.map((e, i) => (
+          <li
+            key={e.id}
+            className="row"
+            {...(i === 0 ? { 'aria-live': 'polite' } : {})}
+          >
             <div className="row__main">
               <div className="row__text">
                 <span className={`tag tag--${e.type}`}>{LABELS[e.type] ?? e.type}</span>

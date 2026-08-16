@@ -444,6 +444,20 @@ html, body {
   cursor: pointer;
 }
 .bubble__action:disabled { opacity: 0.5; cursor: wait; }
+/* :focus-visible needs Safari 15.4+, which an iPhone 6 (iOS 12-15.3) never
+   gets, so those rules are dropped entirely there and keyboard focus becomes
+   invisible. These :focus fallbacks restore it; browsers that do support
+   :focus-visible get the outline suppressed again by the
+   :not(:focus-visible) rules below, so pointer clicks stay clean. */
+.bubble__action:focus,
+.retry__connect:focus,
+.settings__close:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.bubble__action:focus:not(:focus-visible),
+.retry__connect:focus:not(:focus-visible),
+.settings__close:focus:not(:focus-visible) { outline: none; }
 .bubble__action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Image bubbles (screenshot, Wi-Fi QR) — the image fills the bubble and the
@@ -998,7 +1012,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 
 .settings__hint {
   margin: 16px 0 0;
-  color: #55666f;
+  color: #7d8f9a;
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
@@ -1056,7 +1070,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   border-radius: 12px;
   background: #070c10;
 }
-.deck__title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck__title { color: #dfe9ee; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .deck__meta  { margin-top: 3px; color: #7d8f9a; font-size: 12px; min-height: 15px; }
 
 .deck__meters { display: flex; margin-top: 12px; }
@@ -1161,7 +1175,9 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
    ========================================================================= */
 .pair {
   position: absolute;
-  inset: 0;
+  /* `inset` needs Safari 14.1+; the iPhone 6/6s targets iOS 12-15, so the
+     longhand offsets below are required for the overlay to cover the stage. */
+  top: 0; right: 0; bottom: 0; left: 0;
   z-index: 12;
   display: flex;
   flex-direction: column;
@@ -1209,7 +1225,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 .pair__found__main { min-width: 0; }
 .pair__found__name { font-size: 14.5px; font-weight: 500; }
 .pair__found__meta { margin-top: 3px; color: #7d8f9a; font-size: 12px; overflow-wrap: anywhere; }
-.pair__alt { margin: 18px auto 0; color: #4f6069; font-size: 12px; text-align: center; }
+.pair__alt { margin: 18px auto 0; color: #7d8f9a; font-size: 12px; text-align: center; }
 .pair__alt button {
   border: 0; background: none; padding: 0;
   color: var(--accent); font: inherit; font-size: 12px;
@@ -1226,12 +1242,13 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   background: #070c10;
   overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  color: #4f6069; font-size: 11.5px; text-align: center; line-height: 1.5;
+  color: #7d8f9a; font-size: 11.5px; text-align: center; line-height: 1.5;
 }
 /* The live camera fills the frame once granted; until then the placeholder
    icon and caption sit in the same box. */
 .pair__scan video {
-  position: absolute; inset: 0;
+  position: absolute;
+  top: 0; right: 0; bottom: 0; left: 0;
   width: 100%; height: 100%;
   object-fit: cover;
 }
@@ -1241,7 +1258,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 .pair__divider {
   display: flex; align-items: center;
   margin: 22px 0 18px;
-  color: #4f6069; font-size: 11px; letter-spacing: 0.08em;
+  color: #7d8f9a; font-size: 11px; letter-spacing: 0.08em;
 }
 .pair__divider::before, .pair__divider::after {
   content: ''; flex: 1 1 auto; height: 1px; background: rgba(255,255,255,0.12);
@@ -1416,7 +1433,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   z-index: 2;
   display: none;
   text-align: center;
-  color: #4f6069;
+  color: #7d8f9a;
   font-size: 12.5px;
   pointer-events: none;
 }
@@ -1437,11 +1454,29 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 }
 .stage[data-dnd="true"] .dock__mic::after { opacity: 1; }
 .stage[data-dnd="true"] .dock__mic { color: #5b7280; }
+
+/* Screen-reader-only text (the h1 document heading above). Present to
+   assistive tech, absent to sight and layout. */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  white-space: nowrap;
+}
 </style>
 </head>
 <body>
 
 <div class="stage" id="stage">
+  <!-- The only heading the shell needs. The stage's own copy is labels and
+       live regions, so this stays visually hidden — its job is giving screen
+       readers and navigation tools a document outline. -->
+  <h1 class="visually-hidden">Companion</h1>
+
   <!-- ------------------------------------------------------------- AMBIENT -->
   <div class="ambient" aria-hidden="true">
     <div class="ambient__blob ambient__blob--a"></div>
@@ -1562,7 +1597,8 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
     <div class="pair__step" id="pairConnect">
       <h2 class="pair__title">Point it at your computer</h2>
       <p class="pair__sub">Open the dashboard on the PC running the backend and scan the code it shows.</p>
-      <div class="pair__scan" id="pairScan" data-live="false">
+      <div class="pair__scan" id="pairScan" data-live="false" role="button" tabindex="0"
+           aria-label="Start the camera to scan a pairing code from the dashboard">
         <video id="pairVideo" playsinline muted autoplay></video>
         <div class="pair__scan__hint" id="pairScanHint">
           <svg viewBox="0 0 24 24" fill="none" stroke="#4dd8e6" stroke-width="1.4"
@@ -1599,8 +1635,10 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
     </div>
   </div>
 
-  <div class="retry" id="retry" data-visible="false" role="status">
-    <span class="retry__dot"></span><span id="retryText">can’t reach the backend</span>
+  <div class="retry" id="retry" data-visible="false">
+    <!-- role="status" on the text, not the container: a live region must not
+         contain interactive controls (same rule the bubble above follows). -->
+    <span class="retry__dot"></span><span id="retryText" role="status">can’t reach the backend</span>
     <button class="retry__connect" id="connectBackend" type="button">Connect</button>
   </div>
 
@@ -1800,12 +1838,16 @@ window.CompanionConfig = (function () {
         dnd: !!parsed.dnd
       };
     } catch (e) {
-      /* Private mode or a corrupt value: fall back rather than fail to boot. */
+      /* Private mode or a corrupt value: fall back rather than fail to boot.
+         The full key set matters — a partial object leaves paired/dnd
+         undefined, which the pairing module reads as "never paired" and would
+         flash the first-run overlay on every boot. */
       console.warn('[Companion] settings unreadable, using defaults:', e);
       return {
         backendUrl: DEFAULTS.backendUrl, dim: DEFAULTS.dim,
         sleepNow: DEFAULTS.sleepNow, voice: DEFAULTS.voice,
-        city: DEFAULTS.city, token: DEFAULTS.token
+        city: DEFAULTS.city, token: DEFAULTS.token,
+        paired: false, dnd: false
       };
     }
   }
@@ -2351,8 +2393,13 @@ window.CompanionSpeech = (function () {
     if (window.CompanionConfig.get('dnd')) return;
     if (!text) return;
 
+    /* A new reply supersedes an old one — cancel first, THEN capture the
+       generation. The old order ran cancel() after ++speakGeneration, so the
+       guard below compared the new generation against the already-bumped one
+       and every reply was discarded as stale: TTS never played and the mouth
+       never animated. */
+    cancel();
     var mySpeak = ++speakGeneration;
-    cancel();                                  // a new reply supersedes an old one
 
     try {
       var res = await window.CompanionConfig.request('/speak', {
@@ -3375,7 +3422,13 @@ window.CompanionGlance = (function () {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       var text = JSON.stringify(data, null, 2);
-      if ('download' in document.createElement('a')) {
+      /* 'download' exists as an attribute on iOS 12 — but the tap navigates
+         to the blob: URL instead of saving the file, which would throw the
+         user out of the app into a raw JSON page. Only take the download path
+         where it actually works; iOS gets the clipboard instead. */
+      var isIOS = /iP(hone|ad|od)/.test(navigator.userAgent)
+        || (navigator.platform && /iP(hone|ad|od)/.test(navigator.platform));
+      if (!isIOS && 'download' in document.createElement('a')) {
         var blob = new Blob([text], { type: 'application/json' });
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -3958,6 +4011,16 @@ window.CompanionVoice = (function () {
     micBtn.addEventListener('touchcancel', endRecording);
   }
 
+  /* Live mic: a hidden page must end the take. iOS suspends JS timers for
+     backgrounded tabs, so the 15s safety cutoff would not run and the recorder
+     would keep capturing with the indicator lit; swiping the app away would
+     leak the stream tracks for the rest of the page's life. Guarded inside, so
+     firing these when nothing is recording is a no-op. */
+  window.addEventListener('pagehide', endRecording);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) endRecording();
+  });
+
   return {
     isRecording: function () { return recording; },
     beginRecording: beginRecording,
@@ -4000,9 +4063,16 @@ window.CompanionVoice = (function () {
     value.textContent = Math.round(pct) + '%';
   }
 
+  function resetPc() {
+    document.getElementById('deckPcTitle').textContent = 'Nothing playing';
+    document.getElementById('deckPcMeta').textContent = '';
+    meter('deckCpu', 'deckCpuValue', null);
+    meter('deckRam', 'deckRamValue', null);
+  }
+
   function loadPc() {
     return request('/status/pc').then(function (res) {
-      if (!res.ok) return;
+      if (!res.ok) return resetPc();
       return res.json().then(function (s) {
         var track = s.now_playing;
         document.getElementById('deckPcTitle').textContent =
@@ -4013,12 +4083,21 @@ window.CompanionVoice = (function () {
         meter('deckCpu', 'deckCpuValue', s.cpu_percent);
         meter('deckRam', 'deckRamValue', s.ram_percent);
       });
-    }).catch(function () { /* the retry strip already reports a dead backend */ });
+    }).catch(function () {
+      /* The retry strip already reports a dead backend; the sheet must not
+         keep displaying the last snapshot as if the machine were alive. */
+      resetPc();
+    });
+  }
+
+  function resetNext() {
+    document.getElementById('deckNextText').textContent = 'Nothing scheduled';
+    document.getElementById('deckNextWhen').textContent = '';
   }
 
   function loadNext() {
     return request('/reminders').then(function (res) {
-      if (!res.ok) return;
+      if (!res.ok) return resetNext();
       return res.json().then(function (data) {
         var list = (data.reminders || []).slice();
         list.sort(function (a, b) { return a.fire_time - b.fire_time; });
@@ -4029,12 +4108,12 @@ window.CompanionVoice = (function () {
             + ' · ' + list.length + ' pending'
           : '';
       });
-    }).catch(function () {});
+    }).catch(function () { resetNext(); });
   }
 
   function loadDevices() {
     return request('/smart/devices').then(function (res) {
-      if (!res.ok) return;
+      if (!res.ok) return clearPills();
       return res.json().then(function (data) {
         pills.textContent = '';
         if (!data.available) {
@@ -4050,7 +4129,11 @@ window.CompanionVoice = (function () {
           pills.appendChild(pill(d));
         });
       });
-    }).catch(function () {});
+    }).catch(function () { clearPills(); });
+  }
+
+  function clearPills() {
+    pills.textContent = '';
   }
 
   function pill(device) {
@@ -4163,7 +4246,37 @@ window.CompanionVoice = (function () {
       dots[i].setAttribute('data-on', i <= stepIndex ? 'true' : 'false');
     }
     if (name !== 'connect') stopCamera();
+    /* Land keyboard/assistive focus on the step's primary action rather than
+       leaving it on the body while a modal is up. */
+    var step = steps[name];
+    var primary = step.querySelector('.pair__btn');
+    var first = primary || step.querySelector('button, input, [tabindex]:not([tabindex="-1"])');
+    if (first) first.focus();
   }
+
+  /* Tab stays inside the dialog: a modal must not hand focus back to the
+     shell underneath, which is still interactive. */
+  function trapTab(e) {
+    if (e.key !== 'Tab') return;
+    var nodes = root.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])');
+    var list = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (!n.disabled && n.offsetParent !== null) list.push(n);
+    }
+    if (!list.length) return;
+    var first = list[0];
+    var last = list[list.length - 1];
+    var active = document.activeElement;
+    if (e.shiftKey && (active === first || active === root)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+  root.addEventListener('keydown', trapTab);
 
   function say(el, text, state) {
     el.textContent = text || '';
@@ -4353,10 +4466,11 @@ window.CompanionVoice = (function () {
       return;
     }
     say(status, 'starting the camera…', 'warn');
+    var mediaPromise = navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }, audio: false
+    });
     Promise.all([
-      navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }, audio: false
-      }),
+      mediaPromise,
       loadDecoder()
     ]).then(function (results) {
       stream = results[0];
@@ -4367,6 +4481,12 @@ window.CompanionVoice = (function () {
       say(status, 'point it at the code on the dashboard', 'warn');
       scanTimer = setInterval(tickScan, SCAN_INTERVAL_MS);
     }).catch(function (err) {
+      /* If the decoder script failed to load, Promise.all rejects with the
+         camera stream already live but unassigned — stop its tracks here or
+         iOS keeps the indicator lit and a retry stacks a second stream. */
+      mediaPromise.then(function (s) {
+        s.getTracks().forEach(function (t) { t.stop(); });
+      }, function () {});
       /* getUserMedia needs a secure context: over plain http on a LAN IP the
          camera is blocked outright, and saying so beats a dead button. */
       var insecure = window.location.protocol !== 'https:'
@@ -4417,6 +4537,14 @@ window.CompanionVoice = (function () {
   }
 
   scanBox.addEventListener('click', startCamera);
+  /* The scan box is a focusable control (tabindex 0), so it must answer the
+     keyboard the way a button would. */
+  scanBox.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      startCamera();
+    }
+  });
 
   /* --- entry ------------------------------------------------------------- */
 

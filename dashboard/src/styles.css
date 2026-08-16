@@ -23,6 +23,7 @@
   --surface-2: #131c22;
   --line: rgba(255, 255, 255, 0.08);
   --text: #dfe9ee;
+  --text-rgb: 223, 233, 238;
   --muted: #7d8f9a;
   --accent: #4dd8e6;
   --accent-rgb: 77, 216, 230;
@@ -113,7 +114,7 @@ body {
   font-size: 13px;
   outline: none;
 }
-.field input:hover { border-color: color-mix(in srgb, var(--text) 45%, transparent); }
+.field input:hover { border-color: rgba(var(--text-rgb), 0.45); }
 .field input:focus { border-color: var(--accent); }
 
 /* --- status strip -------------------------------------------------------- */
@@ -142,16 +143,6 @@ body {
 .dot--bad { background: var(--bad); }
 
 /* --- layout -------------------------------------------------------------- */
-.grid {
-  display: grid;
-  /* minmax(0, 1fr) rather than minmax(330px, 1fr): with a fixed minimum the
-   * track cannot shrink below 330px, so a window narrower than ~378px (after
-   * the .app padding) overflows horizontally instead of wrapping. */
-  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  gap: 18px;
-  align-items: start;
-}
-
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -208,7 +199,7 @@ body {
 }
 .row > * + * { margin-left: 12px; }
 .row__main { flex: 1 1 auto; min-width: 0; }
-.row__text { font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.row__text { font-size: 13.5px; line-height: 1.4; overflow-wrap: break-word; overflow-wrap: anywhere; }
 .row__sub { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
 .row__actions { display: flex; align-items: center; flex: 0 0 auto; }
 .row__actions > * + * { margin-left: 6px; }
@@ -238,8 +229,8 @@ body {
   background: transparent;
   color: var(--muted);
 }
-.btn--quiet:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
-.btn--quiet:active:not(:disabled) { background: color-mix(in srgb, var(--text) 14%, transparent); }
+.btn--quiet:hover:not(:disabled) { background: rgba(var(--text-rgb), 0.07); color: var(--text); }
+.btn--quiet:active:not(:disabled) { background: rgba(var(--text-rgb), 0.14); }
 
 .btn--danger { border-color: rgba(var(--bad-rgb), 0.5); background: transparent; color: var(--bad); }
 .btn--danger:hover:not(:disabled) { background: rgba(var(--bad-rgb), 0.14); }
@@ -270,26 +261,6 @@ body {
   transition: transform 160ms ease, background 160ms ease;
 }
 .toggle--on .toggle__knob { transform: translateX(20px); background: var(--accent); }
-
-/* --- PC panel ------------------------------------------------------------ */
-.nowplaying {
-  padding: 11px 12px;
-  margin-bottom: 12px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.nowplaying__title { font-size: 14px; font-weight: 500; }
-.nowplaying__meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
-
-.kv {
-  display: flex;
-  justify-content: space-between;
-  padding: 7px 2px;
-  font-size: 13px;
-  color: var(--muted);
-}
-.kv strong { color: var(--text); font-weight: 500; }
 
 .meter { margin-top: 10px; }
 .meter__head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
@@ -325,6 +296,7 @@ body {
   font-size: 13.5px;
   line-height: 1.45;
   max-width: 88%;
+  overflow-wrap: break-word;
   overflow-wrap: anywhere;
 }
 .bubble--user { align-self: flex-end; background: rgba(var(--accent-rgb), 0.14); border: 1px solid rgba(var(--accent-rgb), 0.24); }
@@ -401,9 +373,12 @@ body {
   display: flex;
   align-items: center;
   padding: 20px;
+  /* The accent is mixed over the surface at 9% — as rgba stops, not
+     color-mix(): that function needs Safari 16.2+, and the iPhone 6 targets
+     iOS 12-15, where the whole gradient would silently vanish. */
   background: linear-gradient(
     140deg,
-    color-mix(in srgb, var(--accent) 9%, var(--surface)),
+    rgba(var(--accent-rgb), 0.09),
     var(--surface)
   );
   border: 1px solid var(--line);
@@ -474,7 +449,7 @@ body {
   align-items: center;
   padding: 26px;
   background: var(--surface);
-  border: 1px dashed color-mix(in srgb, var(--text) 22%, transparent);
+  border: 1px dashed rgba(var(--text-rgb), 0.22);
   border-radius: var(--radius);
 }
 .setup > * + * { margin-left: 20px; }
@@ -598,7 +573,6 @@ body {
    stale at the same instant. Pointer events stay on — the data is old but the
    controls still work the moment the backend answers again. */
 .bento.is-stale, .panel.is-stale, .hero.is-stale { opacity: 0.55; }
-.panel__stale { color: var(--muted); font-size: 11px; }
 .statusbar--warn { color: var(--warn); border-color: rgba(var(--warn-rgb), 0.3); }
 .statusbar--down { border-color: rgba(var(--bad-rgb), 0.3); }
 .statusbar__action { margin-left: auto; height: 30px; padding: 0 12px; font-size: 12.5px; }
@@ -616,7 +590,9 @@ body {
 /* --- pairing dialog (1d / 3c) -------------------------------------------- */
 .modal {
   position: fixed;
-  inset: 0;
+  /* `inset` needs Safari 14.1+; the iPhone 6 targets iOS 12-15, so the
+     longhand offsets are required for the scrim to cover the viewport. */
+  top: 0; right: 0; bottom: 0; left: 0;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -688,6 +664,7 @@ body {
   color: var(--text);
   font-size: 12.5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: break-word;
   overflow-wrap: anywhere;
 }
 .pair__actions { display: flex; margin-top: 8px; }

@@ -67,9 +67,11 @@ export function StatusBar({
    * offers the one thing that can fix it. */
   if (error) {
     return (
-      <div className="statusbar statusbar--down" role="status" aria-live="polite">
+      <div className="statusbar statusbar--down">
         <span className="dot dot--bad" aria-hidden />
-        <span>
+        {/* role=status on the text, not the container: a live region must not
+            contain interactive controls (the Settings button). */}
+        <span role="status">
           Can’t reach {backendUrl} — {error}
         </span>
         <button type="button" className="btn statusbar__action" onClick={onSettings}>

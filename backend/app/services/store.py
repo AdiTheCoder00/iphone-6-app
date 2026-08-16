@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS reminders (
     text        TEXT    NOT NULL,
     fire_time   REAL    NOT NULL,
     created_at  REAL    NOT NULL,
-    fired       INTEGER NOT NULL DEFAULT 0
+    fired       INTEGER NOT NULL DEFAULT 0,
+    delivered   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (fired, fire_time);
 
@@ -100,6 +101,7 @@ class Store:
         for column, ddl in (
             ("repeat", "ALTER TABLE reminders ADD COLUMN repeat TEXT"),
             ("power_action", "ALTER TABLE reminders ADD COLUMN power_action TEXT"),
+            ("delivered", "ALTER TABLE reminders ADD COLUMN delivered INTEGER NOT NULL DEFAULT 0"),
         ):
             if column not in existing:
                 conn.execute(ddl)
@@ -207,6 +209,58 @@ class Store:
                 (next_fire, reminder_id),
             )
             conn.commit()
+
+    def mark_delivered(self, reminder_id: int) -> None:
+        """Record that a claimed reminder reached an SSE client.
+
+        This is what distinguishes "fired and delivered" from "claimed but
+        lost when the server died mid-publish". Guarded on fired = 1, so only
+        the claimer can mark delivery.
+        """
+        conn = self._require()
+        with self._lock:
+            conn.execute(
+                "UPDATE reminders SET delivered = 1 WHERE id = ? AND fired = 1",
+                (reminder_id,),
+            )
+            conn.commit()
+
+    def stale_claimed(self, grace_seconds: float = 60.0) -> list[dict]:
+        """Reminders claimed but never delivered, older than the grace period.
+
+        A row lands here only if the process died between mark_fired and
+        publish — the publish path marks delivered immediately after. The
+        grace period stops a concurrently running second process from having
+        its in-flight claims re-armed underneath it. Power-action rows are
+        excluded deliberately: they are executed, not delivered, so they have
+        no delivered flag to trust.
+        """
+        conn = self._require()
+        cutoff = time.time() - grace_seconds
+        with self._lock:
+            rows = conn.execute(
+                "SELECT id, text, fire_time FROM reminders"
+                " WHERE fired = 1 AND delivered = 0 AND power_action IS NULL"
+                " AND fire_time <= ?",
+                (cutoff,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def rearm_reminder(self, reminder_id: int) -> bool:
+        """Re-arm a previously claimed row, keeping its original fire time.
+
+        Used by the startup reconciliation for claims that died before
+        delivery. Guarded on fired = 1 like unmark_fired, so only the
+        claimer can touch it.
+        """
+        conn = self._require()
+        with self._lock:
+            cur = conn.execute(
+                "UPDATE reminders SET fired = 0 WHERE id = ? AND fired = 1",
+                (reminder_id,),
+            )
+            conn.commit()
+        return cur.rowcount > 0
 
     def snooze_fired_reminder(self, reminder_id: int, fire_time: float) -> dict | None:
         """Reactivate a delivered reminder at a later time.

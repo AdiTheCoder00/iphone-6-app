@@ -25,13 +25,19 @@ export function ActivityTicker({ events, connected, failed }: Props) {
         {connected ? 'live' : failed ? 'offline' : 'reconnecting'}
       </span>
       {/* aria-live on the list, not the section: announcing the "live/offline"
-          pill on every reconnect would talk over the events themselves. */}
-      <div className="ticker__events" aria-live="polite">
+          pill on every reconnect would talk over the events themselves. The
+          live region sits on the newest event only (index 0 — events are
+          prepended), so connect-time backlog is not read out in full. */}
+      <div className="ticker__events">
         {events.length === 0 ? (
           <span className="muted">Nothing yet.</span>
         ) : (
-          events.slice(0, 3).map((e) => (
-            <span key={e.id} className="ticker__event">
+          events.slice(0, 3).map((e, i) => (
+            <span
+              key={e.id}
+              className="ticker__event"
+              {...(i === 0 ? { 'aria-live': 'polite' } : {})}
+            >
               <span className={`tag tag--${e.type}`}>{LABELS[e.type] ?? e.type}</span>
               {e.text ? <span className="ticker__text">{e.text}</span> : null}
               <time dateTime={e.at.toISOString()}>

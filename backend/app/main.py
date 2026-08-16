@@ -92,9 +92,14 @@ KEEPALIVE_INTERVAL_SECONDS = 15
 
 # A keyword spotter commonly fires two or three times on one utterance, and the
 # tail of the companion's own reply can retrigger it. Anything inside this
-# window after an accepted wake is dropped.
+# window after an accepted wake is dropped. The window is tracked per source:
+# one board re-arming (or a second board) within the window must not swallow
+# the other's wake.
 WAKE_DEBOUNCE_SECONDS = 3.0
-_last_wake_at = 0.0
+_last_wake_at: dict[str, float] = {}
+# The dict is keyed by client-supplied text (token-gated and LAN-only, but
+# still unbounded input): cap it so a chatty source cannot grow memory.
+_MAX_TRACKED_WAKE_SOURCES = 16
 
 
 def sse_event(payload: dict) -> str:
@@ -130,7 +135,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
                 what = (
                     f"Audio exceeds {settings.max_audio_mb} MB limit"
                     if request.url.path == "/transcribe"
-                    else f"Image exceeds {settings.max_audio_mb} MB limit"
+                    else f"Image exceeds {settings.max_image_mb} MB limit"
                 )
                 return JSONResponse({"detail": what}, status_code=413)
         return await call_next(request)
@@ -152,6 +157,10 @@ async def lifespan(app: FastAPI):
     if unknown:
         logger.warning("Unrecognized keys in backend/.env (possible typos): %s", ", ".join(unknown))
     store.init()
+    # A crash between "claim" and "publish" would leave reminders fired but
+    # never delivered; re-arm those before the poller starts so the next scan
+    # delivers them.
+    reminder_service.reconcile()
     # Reminders that came due while the server was down are NOT lost: they stay
     # pending in SQLite and fire once a client connects (see check_reminders).
     reminder_service.start()
@@ -222,7 +231,10 @@ app.add_middleware(
 # handling — the check is header-only and reveals nothing.
 app.add_middleware(
     BodySizeLimitMiddleware,
-    max_bytes=settings.max_audio_mb * 1024 * 1024,
+    # One shared bound for both upload paths; the endpoint caps below are the
+    # authoritative per-path limits, so the middleware uses the larger of the
+    # two rather than rejecting valid images when max_image_mb > max_audio_mb.
+    max_bytes=max(settings.max_audio_mb, settings.max_image_mb) * 1024 * 1024,
 )
 
 
@@ -510,14 +522,21 @@ async def wake_endpoint(body: WakeRequest):
         return WakeResponse(accepted=False, reason="no-listener")
 
     # Monotonic: immune to wall-clock adjustments, which matter on a machine
-    # that may sync time while this is running.
+    # that may sync time while this is running. Keyed by source so an
+    # unrelated wake (a second board, or one that re-armed) is not dropped
+    # just because another board spoke in the last few seconds.
     now = time.monotonic()
-    since = now - _last_wake_at
+    since = now - _last_wake_at.get(body.source, 0.0)
     if since < WAKE_DEBOUNCE_SECONDS:
         logger.info("Wake from %s ignored (%.1fs since last)", body.source, since)
         return WakeResponse(accepted=False, reason="debounced")
 
-    _last_wake_at = now
+    _last_wake_at[body.source] = now
+    if len(_last_wake_at) > _MAX_TRACKED_WAKE_SOURCES:
+        # Drop the oldest entry, keeping the dict bounded. A dropped source
+        # simply loses its debounce for one wake — harmless.
+        oldest = min(_last_wake_at, key=_last_wake_at.get)
+        del _last_wake_at[oldest]
     event_hub.publish({"type": "wake", "emotion": "listen"})
     logger.info("Wake accepted from %s (%d listener(s))", body.source, event_hub.subscriber_count)
     return WakeResponse(accepted=True)
@@ -599,7 +618,7 @@ async def vision_endpoint(image: UploadFile = File(...)):
     The image is the whole context — no conversation, no tools — and the reply
     is plain text the phone renders like any other companion line.
     """
-    max_bytes = settings.max_audio_mb * 1024 * 1024
+    max_bytes = settings.max_image_mb * 1024 * 1024
     try:
         data = await image.read(max_bytes + 1)
     finally:
@@ -609,7 +628,7 @@ async def vision_endpoint(image: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Empty image upload")
     if len(data) > max_bytes:
         raise HTTPException(
-            status_code=413, detail=f"Image exceeds {settings.max_audio_mb} MB limit"
+            status_code=413, detail=f"Image exceeds {settings.max_image_mb} MB limit"
         )
 
     try:
@@ -653,6 +672,7 @@ async def events(request: Request):
                 events, power_actions = await asyncio.shield(claim_task)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
+                    store.mark_delivered(fired["id"])
                 # Rows claimed here are marked fired and will not be picked up
                 # by the poll loop — execute them now, exactly as that loop
                 # would, so a scheduled shutdown due during downtime actually

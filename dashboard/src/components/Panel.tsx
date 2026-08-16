@@ -16,11 +16,6 @@ interface PanelProps {
    * backend" look identical as an empty list, and only one is fine. */
   empty?: boolean;
   emptyText?: string;
-  /* Mockup 3f: the backend dropped but this panel still holds its last good
-   * data. Dimmed and labelled with when it was read, so a stale number is
-   * never mistaken for a live one. */
-  stale?: boolean;
-  staleLabel?: string;
   children?: ReactNode;
 }
 
@@ -45,21 +40,13 @@ export function Panel({
   error,
   empty,
   emptyText = 'Nothing here.',
-  stale,
-  staleLabel,
   children,
 }: PanelProps) {
   return (
-    <section className={`panel${stale ? ' is-stale' : ''}`}>
+    <section className="panel">
       <header className="panel__head">
         <h2 className="panel__title">{title}</h2>
-        {/* When stale, the last-seen time replaces the usual aside: a live
-            count next to dimmed data would be claiming freshness it lost. */}
-        {stale && staleLabel ? (
-          <div className="panel__aside">
-            <span className="panel__stale">{staleLabel}</span>
-          </div>
-        ) : aside ? (
+        {aside ? (
           <div className="panel__aside">{aside}</div>
         ) : null}
       </header>

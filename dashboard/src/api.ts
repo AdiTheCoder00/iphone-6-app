@@ -128,11 +128,6 @@ export const api = {
     request<{ reminders: Reminder[] }>(s, '/reminders', {}, signal).then((r) => r.reminders),
   cancelReminder: (s: Settings, id: number) =>
     request<unknown>(s, `/reminders/${id}`, { method: 'DELETE' }),
-  snoozeReminder: (s: Settings, id: number, minutes: number) =>
-    request<Reminder>(s, `/reminders/${id}/snooze`, {
-      method: 'POST',
-      body: JSON.stringify({ minutes }),
-    }),
   facts: (s: Settings, signal?: AbortSignal) =>
     request<{ facts: Fact[] }>(s, '/facts', {}, signal).then((r) => r.facts),
   deleteFact: (s: Settings, id: number) =>
@@ -153,11 +148,6 @@ export const api = {
     request<unknown>(s, `/smart/devices/${encodeURIComponent(entityId)}/state`, {
       method: 'POST',
       body: JSON.stringify({ turn_on: turnOn }),
-    }),
-  chat: (s: Settings, message: string, history: ChatMessage[]) =>
-    request<{ reply: string; emotion: string }>(s, '/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message, history }),
     }),
 };
 

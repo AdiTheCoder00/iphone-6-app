@@ -28,6 +28,10 @@ const EXIT_MS = 180;
 export function PairingDialog({ settings, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  /* The element that opened the dialog, so focus can return to it on close —
+     otherwise it falls back to the body and a keyboard user loses their place. */
+  const openerRef = useRef<HTMLElement | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [drawError, setDrawError] = useState<string | null>(null);
@@ -93,12 +97,40 @@ export function PairingDialog({ settings, onClose }: Props) {
   }, [settings]);
 
   useEffect(() => {
+    /* Focus management: the Done button gets focus on open, Tab stays inside
+     * the dialog, and focus returns to the opener on unmount. */
+    openerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key === 'Escape') {
+        close();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const modal = modalRef.current;
+      if (!modal) return;
+      const nodes = modal.querySelectorAll<HTMLElement>(
+        'button, [href], input, [tabindex]:not([tabindex="-1"])',
+      );
+      const list = Array.from(nodes).filter((n) => !n.hasAttribute('disabled'));
+      if (!list.length) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === modal)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      openerRef.current?.focus();
+    };
   }, [close]);
 
   const copy = async () => {
@@ -114,7 +146,11 @@ export function PairingDialog({ settings, onClose }: Props) {
   };
 
   return (
-    <div className={`modal${closing ? ' modal--closing' : ''}`} onClick={close}>
+    <div
+      className={`modal${closing ? ' modal--closing' : ''}`}
+      ref={modalRef}
+      onClick={close}
+    >
       {/* The panel stops the overlay's click-to-close from firing on any click
           inside it. */}
       <div

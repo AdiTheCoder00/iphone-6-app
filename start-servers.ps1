@@ -30,6 +30,26 @@ if (-not (Test-Path $python)) {
   exit 1
 }
 
+# Single-instance guard: the scheduled task can double-fire alongside a manual
+# run, and two concurrent invocations each pass Test-PortListening before
+# either binds, which starts duplicate server pairs (one of each dies on bind,
+# but the survivor's origin is a coin flip). An exclusively-held lock file
+# makes the loser exit immediately. A crashed run leaves the file behind, but
+# the handle dies with the process, so the next run acquires it cleanly.
+$lockPath = Join-Path $root '.start-servers.lock'
+$lockStream = $null
+try {
+  $lockStream = [System.IO.File]::Open(
+    $lockPath,
+    [System.IO.FileMode]::OpenOrCreate,
+    [System.IO.FileAccess]::ReadWrite,
+    [System.IO.FileShare]::None
+  )
+} catch {
+  Write-Host 'Another start-servers.ps1 is already running - exiting.' -ForegroundColor Yellow
+  exit 0
+}
+
 # Port pre-checks: the scheduled task can fire again after a crash, and a
 # second server would fail to bind anyway - skip cleanly instead.
 function Test-PortListening([int]$port) {
@@ -56,7 +76,7 @@ function Rotate-Log([string]$path) {
 function Is-CompanionProcess([int]$procId) {
   $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
   if (-not $cim) { return $false }
-  return (($cim.Name -match 'python') -and ($cim.CommandLine -match 'uvicorn|serve_frontend'))
+  return (($cim.Name -match 'python') -and ($cim.CommandLine -match 'uvicorn|serve_frontend|frontend_https'))
 }
 
 $cert = Join-Path $root 'certs\companion-server.crt'
@@ -146,3 +166,8 @@ if (-not $frontRunning) {
 } else {
   Write-Host "Frontend already listening on :$frontPort - skipped"
 }
+
+# Release the single-instance lock. The handle also dies on process exit, so a
+# mid-script failure cannot leave a stale lock behind.
+$lockStream.Close()
+Remove-Item -Path $lockPath -Force -ErrorAction SilentlyContinue

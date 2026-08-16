@@ -111,6 +111,27 @@ class ProactiveService:
         event_hub.publish({"type": "proactive", "text": text, "emotion": emotion})
         logger.info("Proactive push: %r (%s)", text, emotion)
 
+    async def _push_rain_alert(self) -> None:
+        """Fetch today's forecast and push the rain line when the threshold
+        is met. Runs detached from the tick; failures only cost the alert."""
+        try:
+            from app.services import tools as tools_module
+
+            forecast = await tools_module.fetch_forecast(settings.weather_city)
+        except Exception as e:
+            logger.info("Rain check skipped: %s", e)
+            return
+        prob = forecast.get("today_precip_prob") or 0
+        if prob < settings.rain_alert_threshold:
+            return
+        await self._push(
+            f"Rain is likely in {forecast['label']} today "
+            f"({prob:.0f}% chance). Mention it in one short sentence, "
+            "and suggest an umbrella if it fits the tone.",
+            _FALLBACK_RAIN,
+            "happy",
+        )
+
     async def _morning_instruction(self) -> str:
         """Morning greeting with today's briefing folded in.
 
@@ -182,7 +203,10 @@ class ProactiveService:
 
         # --- rain alert: once per day when today's forecast says rain
         # Checking once per day is the point; whether the check succeeds, mark
-        # the date so a flaky feed does not retry every minute.
+        # the date so a flaky feed does not retry every minute. The forecast
+        # fetch can take seconds — same reason as the morning greeting, do not
+        # hold the tick — so the whole check runs detached and the tick falls
+        # through to the battery check below.
         if (
             settings.rain_alert_threshold > 0
             and settings.weather_city
@@ -190,26 +214,7 @@ class ProactiveService:
         ):
             self._last_rain_date = today
             self._save_date("proactive.rain_date", today)
-            try:
-                from app.services import tools as tools_module
-
-                forecast = await tools_module.fetch_forecast(settings.weather_city)
-                prob = forecast.get("today_precip_prob") or 0
-                if prob >= settings.rain_alert_threshold:
-                    # Weather fetch can take seconds; same reason as the
-                    # morning greeting — do not hold the tick.
-                    self._detach(
-                        self._push(
-                            f"Rain is likely in {forecast['label']} today "
-                            f"({prob:.0f}% chance). Mention it in one short sentence, "
-                            "and suggest an umbrella if it fits the tone.",
-                            _FALLBACK_RAIN,
-                            "happy",
-                        )
-                    )
-                    return
-            except Exception as e:
-                logger.info("Rain check skipped: %s", e)
+            self._detach(self._push_rain_alert())
 
         # --- battery-low nudge (laptops only; desktops have no battery)
         if (

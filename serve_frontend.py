@@ -248,10 +248,25 @@ class CompanionHandler(SimpleHTTPRequestHandler):
         if self._guarded():
             super().do_HEAD()
 
+    def version_string(self):
+        # The stock "SimpleHTTP/0.6 Python/3.12.10" advertises the runtime to
+        # anyone probing the LAN; there is no reason to hand that out.
+        return "Companion"
+
     def end_headers(self):
         # MIME sniffing could turn a served-but-unintended file into an
         # executable page; the whitelist's whole point is control of content.
         self.send_header("X-Content-Type-Options", "nosniff")
+        # Clickjacking and referrer-leak guards. The referrer matters here:
+        # the backend token rides in the /events query string, and the page
+        # URL therefore carries it — outbound links must not receive one.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if getattr(self.server, "https", False):
+            # HSTS only over TLS: a browser that reached the server on plain
+            # HTTP must not be forced onto https, that would break the
+            # no-cert HTTP setup entirely.
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
         if getattr(self, "_dashboard_csp", False):
             self.send_header("Content-Security-Policy", DASHBOARD_CSP)
         path = urllib.parse.urlparse(self.path).path
@@ -278,6 +293,9 @@ def serve(port: int, cert_dir: Path | None) -> None:
             )
 
     server = _ThrottledServer(("0.0.0.0", port), CompanionHandler)
+    # Read by end_headers to decide HSTS: the flag lives on the server because
+    # the scheme is a serve()-level property, not a per-request one.
+    server.https = cert_dir is not None
 
     if cert_dir is not None:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
