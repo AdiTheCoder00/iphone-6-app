@@ -112,6 +112,8 @@ COMPANION_TOKEN=change-me-to-a-long-random-string
 TTS_ENABLED=true
 WHISPER_MODEL_SIZE=base
 CONVERSATION_STORE_LIMIT=500
+MAX_AUDIO_MB=10
+MAX_IMAGE_MB=10
 ```
 
 `COMPANION_TOKEN` gates every endpoint (except `/health`). If it is unset the

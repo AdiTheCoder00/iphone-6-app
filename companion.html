@@ -353,6 +353,11 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .face, .face__eyes, .eye__glow, .eye__shape, .ambient__blob { animation: none !important; }
   .face-root { transition: none !important; }
+  /* The three infinite status pulses: the recording ring, the retry dot and
+     the thinking dots. The two dots are the only signal of their state, so
+     they stay visible — just static (opacity snap to a readable level). */
+  .dock__mic[data-recording="true"] { animation: none !important; }
+  .retry__dot, .think-dots i { animation: none !important; opacity: 0.9; }
 }
 
 /* ===========================================================================
@@ -688,22 +693,18 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 }
 
 .retry {
-  position: absolute;
-  left: 0; right: 0;
-  /* Above the bubble (which sits at bottom:86px), so the two never overlap. */
-  bottom: 128px;
-  z-index: 4;
-  display: flex;
+  /* Positioned by the band (section 6), not absolutely against the stage:
+     the band owns the whole status row, so the strip can never meet the
+     bubble or the DND note. display (not opacity) hides it, so a hidden
+     strip takes no space in the band's centered row. */
+  display: none;
   align-items: center;
   justify-content: center;
   color: #7d8f99;
   font-size: 12px;
   letter-spacing: 0.02em;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 300ms ease;
 }
-.retry[data-visible="true"] { opacity: 1; pointer-events: auto; }
+.retry[data-visible="true"] { display: flex; }
 /* iOS 12 has no flex `gap`; space the dot/text/button with margins. */
 .retry > * + * { margin-left: 7px; }
 .retry__dot {
@@ -717,16 +718,20 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 .retry__connect {
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid rgba(83, 213, 229, 0.48);
+  /* var(--accent-rgb), not hardcoded cyan: the strip is part of the stage,
+     so its button must join the emotion accent tween — a fixed #53d5e5
+     rendered a third, clashing accent next to the face every time an emotion
+     recoloured the stage. */
+  border: 1px solid rgba(var(--accent-rgb), 0.48);
   border-radius: 22px;
-  background: rgba(21, 53, 62, 0.68);
-  color: #9debf3;
+  background: rgba(var(--accent-rgb), 0.16);
+  color: #dff7fa;
   font: inherit;
   letter-spacing: 0.02em;
   cursor: pointer;
 }
-.retry__connect:active { background: rgba(39, 98, 111, 0.84); }
-.retry__connect:focus-visible { outline: 2px solid #57d8e8; outline-offset: 2px; }
+.retry__connect:active { background: rgba(var(--accent-rgb), 0.3); }
+.retry__connect:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .settings {
   position: absolute;
@@ -1093,9 +1098,33 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 .deck__meter__fill[data-level="bad"]  { background: #e88b8b; }
 
 .deck__dots { display: flex; justify-content: center; margin: 12px 0; }
-.deck__dot { width: 4px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); transition: width 200ms ease, background 200ms ease; }
-.deck__dot + .deck__dot { margin-left: 6px; }
-.deck__dot[data-active="true"] { width: 16px; background: var(--accent); }
+/* The button is the 44px touch target; the visible bar is a ::before, so the
+   tap area and the stripe are separate concerns. */
+.deck__dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 44px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.deck__dot::before {
+  content: '';
+  width: 4px; height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.18);
+  transition: width 200ms ease, background 200ms ease;
+}
+.deck__dot + .deck__dot { margin-left: 0; }
+.deck__dot[data-active="true"]::before { width: 16px; background: var(--accent); }
+/* Keyboard focus: same iOS <15.4 fallback pattern as .bubble__action. */
+.deck__dot:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.deck__dot:focus:not(:focus-visible) { outline: none; }
+.deck__dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .deck__pills { display: flex; overflow-x: auto; scrollbar-width: none; }
 .deck__pills::-webkit-scrollbar { display: none; }
@@ -1150,18 +1179,51 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 .composer__tools { display: none; }
 .composer[data-typing="true"] .composer__tools { display: flex; }
 
-/* The bubble clears the sheet instead of the old 86px dock. */
+/* The bubble clears the sheet AND the status band (which owns the top 54px
+   above the sheet): with the old deck-h+14 the bubble's bottom sat behind
+   the band whenever the DND chip row was up. */
 .bubble,
-.stage[data-composer="open"] .bubble { bottom: calc(var(--deck-h) + 14px); max-height: 150px; }
+.stage[data-composer="open"] .bubble { bottom: calc(var(--deck-h) + 62px); max-height: 150px; }
 
-/* Sits in the gap between the face and the sheet. Keeping the old 178px
-   offset above the bubble would have put it at 191px from the top of the
-   stage — directly over the eyes, which span 122-246px once the sheet claims
-   the lower 298. The whole point of this direction is that nothing covers the
-   face, so the strip loses the offset instead. It can still meet a stale
-   bubble, which is the same overlap the original layout accepted (bubble 86,
-   retry 128) and only reachable when the backend is already down. */
-.retry { bottom: calc(var(--deck-h) + 8px); }
+/* Backend down: the error strip wins over a stale bubble — yesterday's reply
+   next to "can't reach the backend" reads as if the reply were live. The
+   bubble module's timers keep running; the flag clears when health returns
+   and the bubble comes back with whatever it last held. */
+.stage[data-health="down"] .bubble { display: none; }
+
+/* --- status band ---------------------------------------------------------
+   One row between the face and the sheet owning the chip, the DND note and
+   the retry strip. Before this they were three absolute strips anchored to
+   different edges: the chip floated over the glance, the note and the strip
+   shared the same band, and a tall bubble could reach the strip — the exact
+   "PC asleep, DND on" overnight state. Everything here is a band child, so
+   nothing can ever overlap anything else in the row. */
+.band {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(var(--deck-h) + 10px);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  /* The band itself is not interactive; its controls are. */
+  pointer-events: none;
+}
+.band > * { pointer-events: auto; }
+/* iOS 12 has no flex `gap`; space the band children with margins. */
+.band > * + * { margin-left: 10px; }
+/* Priority when both are relevant: an unreachable backend is the louder
+   problem, and hiding the quiet-state indicators keeps the row one line. */
+.retry[data-visible="true"] ~ .dnd-chip,
+.retry[data-visible="true"] ~ .dnd-note { display: none; }
+/* Same rule for thinking: the quiet-state chip/note are only for idle
+   moments, and the band would otherwise sit on top of the thinking dots
+   that own this same gap (they are anchored deck-h+36/+16, inside the
+   band's 54px zone). Thinking implies the backend is up, so the retry
+   strip cannot be showing at the same time — no priority clash. */
+.face-root[data-emotion="think"] ~ .band .dnd-chip,
+.face-root[data-emotion="think"] ~ .band .dnd-note { display: none; }
 
 /* Standalone mode hid the dock until tapped; here the sheet IS the affordance,
    so the mic stays put. Without this the mic is invisible AND untappable on
@@ -1347,7 +1409,12 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 }
 
 /* Absolutely positioned rather than added to .face-root's flex row, which
-   centres the face — a third flex child would shove the eyes off-centre. */
+   centres the face — a third flex child would shove the eyes off-centre.
+   Anchored to the BOTTOM against the deck's height, not top: calc(50% + …):
+   the face-root spans the whole 667px stage (the deck is a padding), so a
+   50% anchor put the dots inside the deck sheet, where its z-index buried
+   them — the "thinking…" affordance was invisible. These offsets land the
+   pair in the gap between the mouth and the sheet. */
 .think-dots, .think-caption {
   position: absolute;
   left: 0; right: 0;
@@ -1357,9 +1424,9 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   transition: opacity 240ms ease;
   pointer-events: none;
 }
-.think-dots { top: calc(50% + 84px); }
+.think-dots { bottom: calc(var(--deck-h) + 36px); }
 .think-caption {
-  top: calc(50% + 108px);
+  bottom: calc(var(--deck-h) + 16px);
   color: #7d8f9a;
   font-size: 12.5px;
   letter-spacing: 0.01em;
@@ -1399,17 +1466,15 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 .stage[data-dnd="true"] .eye__glow { opacity: 0; }
 .stage[data-dnd="true"] .face { opacity: 0.7; }
 
+/* Sits in the status band, not pinned at top:96 — that spot overlapped the
+   glance's meta line and is the hardest reach on a stand-mounted phone. */
 .dnd-chip {
-  position: absolute;
-  top: 96px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
   display: none;
   align-items: center;
-  padding: 4px 10px;
+  min-height: 44px;
+  padding: 0 12px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 22px;
   background: rgba(240, 194, 106, 0.12);
   color: #f0c26a;
   font: inherit;
@@ -1427,12 +1492,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 .stage[data-dnd="true"] .dnd-chip { display: flex; }
 
 .dnd-note {
-  position: absolute;
-  left: 0; right: 0;
-  bottom: calc(var(--deck-h) + 46px);
-  z-index: 2;
   display: none;
-  text-align: center;
   color: #7d8f9a;
   font-size: 12.5px;
   pointer-events: none;
@@ -1515,12 +1575,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
     <div class="think-caption" aria-hidden="true">thinking…</div>
   </div>
 
-  <!-- Do not disturb (mockup 3b): the chip is the off switch, so turning it
-       back on never needs a settings trip. -->
-  <button class="dnd-chip" id="dndChip" type="button">Do not disturb</button>
-  <div class="dnd-note" aria-hidden="true">reminders still fire silently</div>
-
-  <!-- ---------------------------------------------------------------- CHAT -->
+  <!-- ------------------------------------------------------------- CHAT -->
   <!-- A region supports the reminder action buttons; a `status` role must not
        contain interactive controls. aria-live still announces new messages. -->
   <div class="bubble" id="bubble" data-visible="false" role="region" aria-label="Companion message" aria-live="polite"></div>
@@ -1562,9 +1617,12 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
         <div class="deck__meta" id="deckNextWhen"></div>
       </div>
     </div>
-    <div class="deck__dots" id="deckDots" aria-hidden="true">
-      <span class="deck__dot" data-active="true"></span>
-      <span class="deck__dot"></span>
+    <!-- Page dots as real buttons: page 2 (next reminder) was reachable only
+         by horizontal swipe, which is invisible to keyboard and assistive
+         users and undiscoverable by touch. 44px minimum tap height. -->
+    <div class="deck__dots" id="deckDots">
+      <button class="deck__dot" data-active="true" type="button" aria-label="Page 1: this computer"></button>
+      <button class="deck__dot" type="button" aria-label="Page 2: next reminder"></button>
     </div>
     <div class="deck__pills" id="deckPills"></div>
   </div>
@@ -1615,7 +1673,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       <div class="pair__fields">
         <input class="pair__input" id="pairUrl" type="url" inputmode="url" autocomplete="off"
                autocapitalize="off" spellcheck="false" placeholder="http://192.168.1.20:8000" aria-label="Backend URL" />
-        <input class="pair__input" id="pairToken" type="text" autocomplete="off"
+        <input class="pair__input" id="pairToken" type="password" autocomplete="off"
                autocapitalize="off" spellcheck="false" placeholder="Access token" aria-label="Access token" />
       </div>
       <div class="pair__foot">
@@ -1635,11 +1693,23 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
     </div>
   </div>
 
-  <div class="retry" id="retry" data-visible="false">
-    <!-- role="status" on the text, not the container: a live region must not
-         contain interactive controls (same rule the bubble above follows). -->
-    <span class="retry__dot"></span><span id="retryText" role="status">can’t reach the backend</span>
-    <button class="retry__connect" id="connectBackend" type="button">Connect</button>
+  <!-- STATUS BAND — every floating status element lives here, in one row
+       between the face and the deck, so none of them can overlap (chip over
+       glance, note over retry, bubble over retry — the P1 collisions). The
+       retry strip wins when the backend is down: its later sibling rule hides
+       the DND quiet-state indicators, which are only relevant when calm. -->
+  <div class="band" id="band">
+    <!-- Do not disturb (mockup 3b): the chip is the off switch, so turning
+         it back on never needs a settings trip. -->
+    <button class="dnd-chip" id="dndChip" type="button">Do not disturb</button>
+    <div class="dnd-note" aria-hidden="true">reminders still fire silently</div>
+
+    <div class="retry" id="retry" data-visible="false">
+      <!-- role="status" on the text, not the container: a live region must not
+           contain interactive controls (same rule the bubble above follows). -->
+      <span class="retry__dot"></span><span id="retryText" role="status">can’t reach the backend</span>
+      <button class="retry__connect" id="connectBackend" type="button">Connect</button>
+    </div>
   </div>
 
   <div class="dock" id="dock">
@@ -3484,6 +3554,17 @@ window.CompanionGlance = (function () {
        over the closed sheet. */
     document.activeElement && document.activeElement.blur();
   }
+  /* Escape closes the surfaces that have no other keyboard exit: settings
+     first, then the mic prompt. (The pairing overlay handles its own Escape
+     in the pairing module — one owner per surface.) */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (settings.getAttribute('data-open') === 'true') { closeSettings(); return; }
+    var micPrompt = document.getElementById('micPrompt');
+    if (micPrompt.getAttribute('data-open') === 'true') {
+      micPrompt.setAttribute('data-open', 'false');
+    }
+  });
   /* The title bar's Done button is the reliable way out: it stays reachable
      while the keyboard covers the tap-outside strip. */
   document.getElementById('settingsClose').addEventListener('click', closeSettings);
@@ -3633,6 +3714,9 @@ async function checkHealth() {
     if (health && health.ollama_connected && health.model_status === 'ready') {
       if (healthy !== true) {
         showRetry(false);
+        /* A restored backend may have left a stale bubble hidden by the
+           health flag; clear it so the bubble comes back. */
+        stage.removeAttribute('data-health');
         /* Don't stomp sleep mode just because the backend came back. */
 window.Companion.settle();
       }
@@ -3645,6 +3729,7 @@ window.Companion.settle();
 
     if (health && health.ollama_connected && health.model_status === 'warming') {
       showRetry(true, 'warming up the companion', 'wait');
+      stage.removeAttribute('data-health');
       healthy = null;
       armHealthRetry();
       return;
@@ -3652,6 +3737,10 @@ window.Companion.settle();
 
     if (health) {
       showRetry(true, 'server ready · model unavailable', 'retry');
+      stage.removeAttribute('data-health');
+      /* Genuinely broken — the server answers but the model is unusable.
+         sad is reserved for this; an unreachable backend uses sleepy, so
+         the clock (the one readout that needs no backend) stays up. */
       if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
       healthy = false;
       armHealthRetry();
@@ -3660,7 +3749,11 @@ window.Companion.settle();
 
     if (healthy !== false) {
       showRetry(true, 'can’t reach the backend', 'connect');
-      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sad');
+      /* Not an emergency: the PC is off/asleep and the device is effectively
+         dormant — sleepy, not sad. And sleepy is a QUIET_EMOTION, so the
+         glance's clock and weather keep showing instead of vanishing. */
+      if (!window.CompanionConfig.get('sleepNow')) window.Companion.setEmotion('sleepy');
+      stage.setAttribute('data-health', 'down');
     }
     healthy = false;
     armHealthRetry();
@@ -3804,6 +3897,10 @@ window.CompanionVoice = (function () {
   }
 
   async function beginRecording() {
+    /* The slash over the mic must be honest: with DND on the wake handler
+       drops wakes and speak() refuses to talk, so the mic must not record —
+       otherwise the button captures audio while claiming it does not. */
+    if (window.CompanionConfig.get('dnd')) return;
     if (!supported || recording || window.CompanionChat.isBusy()) return;
 
     /* Barge-in: reaching for the mic means "stop, listen to me". Without this
@@ -4170,6 +4267,18 @@ window.CompanionVoice = (function () {
     }
   }, { passive: true });
 
+  /* Tapping a dot jumps to that page — the only non-swipe path to page 2
+     (the next reminder), and the keyboard route now that the dots are real
+     buttons. Instant scroll: scrollTo({behavior:'smooth'}) needs Safari
+     15.4+ and silently falls back on the iPhone 6's OSes. */
+  for (var di = 0; di < dots.length; di++) {
+    (function (i) {
+      dots[i].addEventListener('click', function () {
+        pages.scrollLeft = i * pages.clientWidth;
+      });
+    })(di);
+  }
+
   /* Typing state drives .composer__tools visibility. */
   var input = document.getElementById('composerInput');
   var composer = document.getElementById('composer');
@@ -4277,6 +4386,22 @@ window.CompanionVoice = (function () {
     }
   }
   root.addEventListener('keydown', trapTab);
+
+  /* Escape: back from the manual step to discovery, or dismiss the overlay
+     entirely ("skip for now" — the shell underneath keeps working unpaired).
+     Guarded against the settings sheet and mic prompt, which own their own
+     Escape. */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || root.hidden) return;
+    if (document.getElementById('settings').getAttribute('data-open') === 'true') return;
+    if (document.getElementById('micPrompt').getAttribute('data-open') === 'true') return;
+    if (steps.connect.getAttribute('data-active') === 'true') {
+      show('find', 0);
+    } else {
+      root.hidden = true;
+      stopCamera();
+    }
+  });
 
   function say(el, text, state) {
     el.textContent = text || '';
