@@ -4586,6 +4586,8 @@ window.CompanionVoice = (function () {
 
   function startCamera() {
     if (stream) return;
+    scanTick = 0;
+    noDecodeTicks = 0;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       say(status, 'This browser cannot open the camera. Type the address instead.', 'bad');
       return;
@@ -4612,6 +4614,12 @@ window.CompanionVoice = (function () {
       mediaPromise.then(function (s) {
         s.getTracks().forEach(function (t) { t.stop(); });
       }, function () {});
+      if (!window.jsQR) {
+        /* The camera may be perfectly fine — it is the decoder script that
+           failed to load; the generic camera message below would be a lie. */
+        say(status, 'Decoder unavailable — reload this page and try again.', 'bad');
+        return;
+      }
       /* getUserMedia needs a secure context: over plain http on a LAN IP the
          camera is blocked outright, and saying so beats a dead button. */
       var insecure = window.location.protocol !== 'https:'
@@ -4624,20 +4632,52 @@ window.CompanionVoice = (function () {
     });
   }
 
+  /* --- decode loop ------------------------------------------------------ */
+
+  /* Two decode passes, alternated: the cheap dontInvert pass runs most
+     frames; attemptBoth — which re-binarises the frame inverted and scans
+     again, roughly 2x the cost on the A9 — runs on alternate frames, so a
+     glare-flipped code on a glass monitor is still caught within half a
+     second instead of never. */
+  var scanTick = 0;
+  var noDecodeTicks = 0;
+  /* ~3s of live scanning with nothing found: say so, in the user's terms,
+     instead of letting a working camera look dead. */
+  var HINT_AFTER_TICKS = Math.round(3000 / SCAN_INTERVAL_MS);
+
   function tickScan() {
     if (!stream || !window.jsQR) return;
     if (!video.videoWidth) return;
-    if (!canvas) canvas = document.createElement('canvas');
-    var scale = SCAN_WIDTH / video.videoWidth;
-    canvas.width = SCAN_WIDTH;
-    canvas.height = Math.round(video.videoHeight * scale);
-    var ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    var image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    var found = window.jsQR(image.data, image.width, image.height, {
-      inversionAttempts: 'dontInvert'
-    });
-    if (found && found.data) accept(found.data);
+    try {
+      if (!canvas) canvas = document.createElement('canvas');
+      var scale = SCAN_WIDTH / video.videoWidth;
+      canvas.width = SCAN_WIDTH;
+      canvas.height = Math.round(video.videoHeight * scale);
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      var image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      scanTick++;
+      var found = window.jsQR(image.data, image.width, image.height, {
+        inversionAttempts: scanTick % 2 === 0 ? 'attemptBoth' : 'dontInvert'
+      });
+      if (found && found.data) {
+        noDecodeTicks = 0;
+        accept(found.data);
+        return;
+      }
+    } catch (e) {
+      /* A frame the decoder chokes on must not kill the scan loop: the
+         interval is the whole scanner, and one dead tick under a live camera
+         would look exactly like "never works". Log, and carry on. */
+      console.error('[Companion] scan tick failed:', e);
+    }
+    if (++noDecodeTicks === HINT_AFTER_TICKS) {
+      /* Only upgrade the neutral scanning hint — never clobber an 'ok'
+         (scanned) or 'bad' (error) message with the nag. */
+      if (status.getAttribute('data-state') === 'warn') {
+        say(status, 'scanning… hold steady, avoid glare on the screen', 'warn');
+      }
+    }
   }
 
   function accept(text) {
