@@ -477,20 +477,9 @@ html, body {
   border-radius: 10px;
 }
 
-/* With the composer up the bubble would sit under the input, so it moves
-   above it and gives back the height. Reminder bubbles keep their action
-   row above the fold by staying taller than plain replies. */
-.stage[data-composer="open"] .bubble {
-  bottom: calc(156px + var(--kb, 0px));
-  max-height: 118px;
-}
-.stage[data-composer="open"] .bubble[data-actions="true"] {
-  max-height: 176px;
-}
-/* A screenshot taken with the composer open must not get clipped either. */
-.stage[data-composer="open"] .bubble[data-image="true"] {
-  max-height: none;
-}
+/* The composer is permanently up now (the chat toggle is gone), so the old
+   data-composer state — and the bubble positions that went with it — no
+   longer exist. */
 
 .composer {
   position: absolute;
@@ -820,7 +809,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   cursor: pointer;
 }
 .settings__close:active { background: rgba(39, 98, 111, 0.6); }
-.settings__close:focus-visible { outline: 2px solid #57d8e8; outline-offset: 2px; }
+.settings__close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Grab handle: the only affordance that this is a dismissable sheet. */
 .settings__title::before {
   content: '';
@@ -879,6 +868,12 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   outline: none;
   margin: 0;
 }
+/* Keyboard focus needs a visible substitute for the removed outline. iOS 12
+   has no :focus-visible, but the slider is reachable by assistive tech there
+   too; a focus ring that also shows on tap is a minor cost for a kiosk
+   control. */
+.field__range:focus-visible,
+.field__range:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .field__range::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
@@ -1011,7 +1006,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 
 .rows__empty {
   padding: 9px 2px;
-  color: #4f6069;
+  color: #6f838f;
   font-size: 12px;
 }
 
@@ -1156,8 +1151,6 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 .deck__empty { color: #55666f; font-size: 12px; }
 
 /* --- the two controls move into the sheet --------------------------------- */
-/* The chat button is redundant now: the input is always on screen. */
-.dock__chat { display: none; }
 .dock {
   position: absolute;
   right: 16px;
@@ -1404,8 +1397,10 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
    the think emotion, so the treatment hangs off the attribute that is
    already there. */
 .face-root[data-emotion="think"] {
-  --accent: #f0c26a;
-  --accent-rgb: 240, 194, 106;
+  /* Same periwinkle as the think preset's stage accent: the face and the
+     controls must read as ONE state, not a two-tone mismatch. */
+  --accent: #7aa8f0;
+  --accent-rgb: 122, 168, 240;
 }
 
 /* Absolutely positioned rather than added to .face-root's flex row, which
@@ -1437,7 +1432,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
 .think-dots i {
   width: 6px; height: 6px;
   border-radius: 50%;
-  background: #f0c26a;
+  background: #7aa8f0;
   animation: thinkDot 1.4s ease-in-out infinite;
 }
 .think-dots i + i { margin-left: 8px; }
@@ -1672,7 +1667,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       <div class="pair__divider"><span>OR TYPE IT</span></div>
       <div class="pair__fields">
         <input class="pair__input" id="pairUrl" type="url" inputmode="url" autocomplete="off"
-               autocapitalize="off" spellcheck="false" placeholder="http://192.168.1.20:8000" aria-label="Backend URL" />
+               autocapitalize="off" spellcheck="false" placeholder="https://192.168.1.20:8000" aria-label="Backend URL" />
         <input class="pair__input" id="pairToken" type="password" autocomplete="off"
                autocapitalize="off" spellcheck="false" placeholder="Access token" aria-label="Access token" />
       </div>
@@ -1713,12 +1708,6 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   </div>
 
   <div class="dock" id="dock">
-    <button class="dock__chat" id="chatToggle" type="button" aria-expanded="false" aria-label="Open chat">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-3.6-.7L3 21l1.9-4.9A8.2 8.2 0 0 1 3.6 11.5a8.4 8.4 0 0 1 9-8.4 8.4 8.4 0 0 1 8.4 8.4z"/>
-      </svg>
-    </button>
     <button class="dock__mic" id="micBtn" type="button" data-recording="false"
             aria-label="Hold to talk">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -1731,7 +1720,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   </div>
 
   <!-- ------------------------------------------------------- MIC CONSENT -->
-  <div class="micPrompt" id="micPrompt" data-open="false" role="dialog" aria-label="Enable microphone">
+  <div class="micPrompt" id="micPrompt" data-open="false" role="dialog" aria-modal="true" aria-label="Enable microphone">
     <div class="micPrompt__card">
       <h2 class="micPrompt__title">Enable the microphone?</h2>
       <p class="micPrompt__body">
@@ -1760,7 +1749,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
         <label class="field__label" for="setBackend">Backend URL</label>
         <input class="field__input" id="setBackend" type="url" inputmode="url"
                autocapitalize="off" autocorrect="off" spellcheck="false"
-               placeholder="http://192.168.1.20:8000" />
+               placeholder="https://192.168.1.20:8000" />
       </div>
 
       <div class="field">
@@ -1993,11 +1982,12 @@ window.CompanionConfig = (function () {
   }
 
   /* EventSource has no API for setting request headers, so /events — and only
-     /events — also accepts the token as a query parameter. It is read-only,
-     but it does mean the token appears in the server's access log. */
-  function eventsUrl() {
-    var url = backendUrl() + '/events';
-    return state.token ? url + '?token=' + encodeURIComponent(state.token) : url;
+     /events — opens with a short-lived one-time ticket instead of the token:
+     a query-string token would leak into browser history, Referer headers and
+     proxy logs. The ticket is minted by /events-ticket (which does use the
+     header) and burned on the first stream request. */
+  function eventsUrl(ticket) {
+    return backendUrl() + '/events?ticket=' + encodeURIComponent(ticket);
   }
 
   function onChange(fn) { listeners.push(fn); }
@@ -2330,8 +2320,7 @@ window.Companion = (function () {
     acknowledge: acknowledge,
     startTalking: startTalking,
     setTalkLevel: setTalkLevel,
-    stopTalking: stopTalking,
-    emotions: EMOTIONS.slice()
+    stopTalking: stopTalking
   };
 })();
 
@@ -2516,6 +2505,7 @@ window.CompanionChat = (function () {
   var BUBBLE_MAX_MS = 7000;
   var BUBBLE_ACTION_MAX_MS = 12000;   // reminder bubbles with Done/Snooze
   var ERROR_TEXT = 'having trouble thinking right now';
+  var BUSY_ERROR_TEXT = 'the model is busy right now — try again in a moment';
   var AUTH_ERROR_TEXT = 'my access token is wrong — check settings';
   /* First reconnect delay after a dropped stream. Subsequent failures back
      off up to SSE_RETRY_MAX_MS — a flat 3s retry is right for a backend that
@@ -2534,7 +2524,6 @@ window.CompanionChat = (function () {
      stream is genuinely dead — reconnect on purpose. */
   var SSE_STALL_MS = 3 * 15 * 1000;
 
-  var toggle = document.getElementById('chatToggle');
   var composer = document.getElementById('composer');
   var input = document.getElementById('composerInput');
   var sendBtn = document.getElementById('composerSend');
@@ -2563,23 +2552,11 @@ window.CompanionChat = (function () {
      not leak its object URL for the lifetime of the page. */
   var imageUrl = null;
 
-  /* Mirrored onto the stage so the bubble can move out from under the input
-     with a CSS rule instead of the two elements overlapping. */
-  var stageEl = document.getElementById('stage');
-
-  function openComposer() {
-    composer.setAttribute('data-open', 'true');
-    stageEl.setAttribute('data-composer', 'open');
-    toggle.setAttribute('aria-expanded', 'true');
-    toggle.setAttribute('aria-label', 'Close chat');
-    input.focus();
-  }
-
+  /* The composer is permanently on screen (the chat toggle is gone), so it
+     only ever needs closing — blur the field, which is what dismisses the
+     keyboard. */
   function closeComposer() {
     composer.setAttribute('data-open', 'false');
-    stageEl.removeAttribute('data-composer');
-    toggle.setAttribute('aria-expanded', 'false');
-    toggle.setAttribute('aria-label', 'Open chat');
     input.blur();
   }
 
@@ -2743,6 +2720,22 @@ window.CompanionChat = (function () {
         showBubble(AUTH_ERROR_TEXT, true);
         return;
       }
+      /* A 503 is a dependency failure (Groq down or rate-limited) — the body
+         carries the backend's diagnosis, so the bubble can say what actually
+         happened instead of a generic apology. Anything else non-ok throws to
+         the shared catch. */
+      if (res.status === 503) {
+        var detail = '';
+        try { detail = (await res.json()).detail || ''; } catch (e2) { detail = ''; }
+        clearTimeout(thinkTimer);
+        if (mySend !== sendId) { removeTurn(myTurn); return; }
+        removeTurn(myTurn);
+        window.Companion.setEmotion('sad');
+        showBubble(
+          /rate limit|rejected the request/i.test(detail) ? BUSY_ERROR_TEXT : ERROR_TEXT,
+          true);
+        return;
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
 
@@ -2776,11 +2769,6 @@ window.CompanionChat = (function () {
     }
   }
 
-  toggle.addEventListener('click', function () {
-    if (composer.getAttribute('data-open') === 'true') closeComposer();
-    else openComposer();
-  });
-
   composer.addEventListener('submit', function (e) {
     e.preventDefault();
     var text = input.value.trim();
@@ -2812,6 +2800,9 @@ window.CompanionChat = (function () {
     window.CompanionSpeech.cancel();
     setBusy(true);
     window.Companion.setEmotion('think');
+    /* Captured before the request, like send(): a photo reply from a backend
+       the user replaced mid-flight must not render. */
+    var requestBackend = window.CompanionConfig.backendUrl();
     var form = new FormData();
     form.append('image', file, file.name || 'photo.jpg');
     try {
@@ -2822,6 +2813,7 @@ window.CompanionChat = (function () {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       if (mySend !== sendId) return;
+      if (requestBackend !== window.CompanionConfig.backendUrl()) return;
       conversation.push({ role: 'assistant', content: data.text });
       trimHistory();
       window.Companion.setEmotion('happy');
@@ -2845,17 +2837,24 @@ window.CompanionChat = (function () {
   });
 
   async function fetchScreenshot() {
+    /* Own a generation like the chat paths: a screenshot that lands after a
+       newer turn must not push its image over a fresh reply. */
+    var mySend = ++sendId;
+    var requestBackend = window.CompanionConfig.backendUrl();
     setBusy(true);
     window.Companion.setEmotion('think');
     try {
       var res = await window.CompanionConfig.request('/screenshot', {}, 30000);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var blob = await res.blob();
+      if (mySend !== sendId) return;
+      if (requestBackend !== window.CompanionConfig.backendUrl()) return;
       setBusy(false);
       showImage(URL.createObjectURL(blob));
       window.Companion.setEmotion('happy');
     } catch (err) {
       console.error('[Companion] screenshot failed:', err);
+      if (mySend !== sendId) return;
       setBusy(false);
       window.Companion.setEmotion('sad');
       showBubble('could not grab the screen right now', true);
@@ -2887,7 +2886,7 @@ window.CompanionChat = (function () {
     return delay;
   }
 
-  function connectEvents() {
+  async function connectEvents() {
     /* A stream already up — open, or still connecting — is the live one. A
        stale caller (a retry timer racing an already-started reconnect, a
        watchdog tick mid-attempt) must not tear it down and start a duplicate.
@@ -2897,11 +2896,29 @@ window.CompanionChat = (function () {
     var myGen = ++sseGeneration;
     if (sse) { try { sse.close(); } catch (e) {} sse = null; }
 
+    /* EventSource cannot set headers, so the stream opens with a one-time
+       ticket minted by the token-protected /events-ticket endpoint. A ticket
+       failure (backend down, wrong token) follows the same backoff path as a
+       dropped stream. */
+    var url;
     try {
-      sse = new EventSource(window.CompanionConfig.eventsUrl());
+      var res = await window.CompanionConfig.request('/events-ticket');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      url = window.CompanionConfig.eventsUrl(data.ticket);
+    } catch (e) {
+      if (myGen !== sseGeneration) return;   // a newer attempt owns the slot
+      console.warn('[Companion] could not get an event stream ticket:', e);
+      scheduleReconnect();
+      return;
+    }
+    if (myGen !== sseGeneration) return;
+
+    try {
+      sse = new EventSource(url);
     } catch (e) {
       /* e is a SyntaxError whose message contains the full URL — including
-         the ?token= query — so log only its name. */
+         the ?ticket= query — so log only its name. */
       console.error('[Companion] could not open event stream:', e && e.name);
       scheduleReconnect();
       return;
@@ -3005,20 +3022,21 @@ window.CompanionChat = (function () {
     conversation = [];
     try {
       await window.CompanionConfig.request('/conversation', { method: 'DELETE' });
+      return true;
     } catch (e) {
       console.warn('[Companion] could not clear stored history:', e);
+      return false;
     }
   }
 
   /* Pointing at a different backend — or fixing the token — must move the
-     event stream too. The token rides in the stream's URL, so a changed token
-     means the existing connection is now unauthenticated. */
+     event stream too: a changed backend means the open stream is useless, and
+     a changed token means the next ticket would be minted with the wrong one.
+     Either way, replace the stream rather than letting it linger. */
   window.CompanionConfig.onChange(function (key) {
     if (key === 'backendUrl' || key === 'token') {
       if (sseRetryTimer !== null) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
-      /* The existing stream now points at the wrong target (the token rides
-         in the URL), so it must be replaced — close it first, since
-         connectEvents no-ops on a live stream. */
+      /* Close it first, since connectEvents no-ops on a live stream. */
       if (sse) { try { sse.close(); } catch (e) {} sse = null; }
       connectEvents();
     }
@@ -3158,8 +3176,6 @@ window.CompanionGlance = (function () {
     if (key === 'city' || key === 'backendUrl') refreshWeather();
     if (key === 'backendUrl') refreshNextReminder();
   });
-
-  return { refreshWeather: refreshWeather, updateVisibility: updateVisibility };
 })();
 
 
@@ -3310,8 +3326,11 @@ window.CompanionGlance = (function () {
 
   forgetBtn.addEventListener('click', async function () {
     forgetState.textContent = 'clearing…';
-    await window.CompanionChat.clearHistory();
-    forgetState.textContent = 'cleared';
+    /* clearHistory reports whether the DELETE actually reached the backend —
+       a silent "cleared" would leave stale history on disk the user thinks
+       is gone. */
+    var ok = await window.CompanionChat.clearHistory();
+    forgetState.textContent = ok ? 'cleared' : 'could not clear';
     setTimeout(function () { forgetState.textContent = '—'; }, 2000);
   });
 
@@ -3453,9 +3472,11 @@ window.CompanionGlance = (function () {
     var ssid = qrSsid.value.trim();
     if (!ssid) { qrSsid.focus(); return; }
     /* The standard WIFI: URI format — scanners and iOS Camera read it. The
-       ; and \ characters need escaping per the spec. */
-    var payload = 'WIFI:T:WPA;S:' + ssid.replace(/([\\;])/g, '\\$1')
-      + ';P:' + qrPassword.value.replace(/([\\;])/g, '\\$1') + ';;';
+       spec requires escaping \, ; , and : in both the SSID and the password;
+       an unescaped , or : makes iOS Camera reject or misparse the payload. */
+    function escapeWifi(s) { return s.replace(/([\\;,:])/g, '\\$1'); }
+    var payload = 'WIFI:T:WPA;S:' + escapeWifi(ssid)
+      + ';P:' + escapeWifi(qrPassword.value) + ';;';
     var qr = qrcode(0, 'M');
     qr.addData(payload, 'Byte');
     qr.make();
@@ -3508,20 +3529,33 @@ window.CompanionGlance = (function () {
         a.remove();
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
       } else {
-        /* iOS 12 Safari ignores the download attribute and would try to
-           navigate to the blob: URL. The clipboard still gets the data off
-           the device. */
+        /* iOS 12/13 predate the clipboard API — fall back to the selection
+           path and report honestly. execCommand('copy') usually fails here
+           because the tap's user activation has expired by the time the
+           fetch resolved; the textarea is still selected, so the user can
+           long-press and Copy, and the bubble says so either way. */
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(text);
+            window.CompanionChat.showBubble('conversation copied to clipboard', false);
+            return;
+          } catch (e) {
+            window.CompanionChat.showBubble('could not copy the conversation', true);
+            return;
+          }
+        }
+        var hold = window.CompanionChat.showBubble;
         var ta = document.createElement('textarea');
         ta.value = text;
         document.body.appendChild(ta);
         ta.focus();
         ta.select();
+        /* The selection survives, so the user can long-press and Copy even
+           if the immediate copy attempt fails. */
         var copied = false;
         try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
         ta.remove();
-        window.CompanionChat.showBubble(
-          copied ? 'conversation copied to clipboard' : 'could not copy the conversation', !copied
-        );
+        hold(copied ? 'conversation copied to clipboard' : 'could not copy the conversation', !copied);
       }
     } catch (e) {
       window.CompanionChat.showBubble('could not download the conversation', true);
@@ -3686,7 +3720,6 @@ window.CompanionGlance = (function () {
     retry.setAttribute('data-visible', visible ? 'true' : 'false');
     if (text) document.getElementById('retryText').textContent = text;
     retryAction = action || 'connect';
-    connectBackendBtn.hidden = retryAction === 'wait';
     connectBackendBtn.textContent = retryAction === 'retry' ? 'Retry' : 'Connect';
   }
 
@@ -3708,8 +3741,14 @@ async function checkHealth() {
       healthInFlight = false;
     }
 
-    /* A delayed health result for the old URL must not affect a new target. */
-    if (requestBackend !== window.CompanionConfig.backendUrl()) return;
+    /* A delayed health result for the old URL must not affect a new target.
+       Re-arm before returning: a settings edit mid-probe called checkHealth
+       while healthInFlight was true, which returned without arming — so this
+       is the only place the retry loop can be restarted. */
+    if (requestBackend !== window.CompanionConfig.backendUrl()) {
+      armHealthRetry();
+      return;
+    }
 
     if (health && health.llm_connected && health.model_status === 'ready') {
       if (healthy !== true) {
@@ -3718,7 +3757,7 @@ async function checkHealth() {
            health flag; clear it so the bubble comes back. */
         stage.removeAttribute('data-health');
         /* Don't stomp sleep mode just because the backend came back. */
-window.Companion.settle();
+        window.Companion.settle();
       }
       healthy = true;
       /* Keep watching: a backend that dies later must surface, not be
@@ -4400,6 +4439,26 @@ window.CompanionVoice = (function () {
     el.setAttribute('data-state', text ? (state || 'warn') : 'idle');
   }
 
+  /* A failed fetch says "no answer", but on iOS the two real causes deserve
+     their own words. localhost on the phone is the phone itself, and an https
+     backend that refuses to connect usually means the CA certificate was
+     never installed on this device — both are silent in the raw error. */
+  function unreachableMessage(url) {
+    var host = '';
+    try { host = new URL(url).hostname; } catch (e) { host = ''; }
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+      return 'localhost on the phone is the phone itself — use the computer’s LAN address, like https://192.168.31.139:8000.';
+    }
+    if (/^https:/i.test(url)) {
+      var certUrl = 'http://' + (host || '<computer-IP>') + ':8081/ca.crt';
+      return 'No answer from ' + url.replace(/^https?:\/\//, '') +
+        '. First time on this phone? Install the certificate: open ' + certUrl +
+        ' in Safari, install the profile, then enable full trust under ' +
+        'Settings > General > About > Certificate Trust Settings.';
+    }
+    return 'No answer from ' + url.replace(/^https?:\/\//, '') + '.';
+  }
+
   /* Only http(s) may be paired. Without this a scanned "javascript:..." or
      "file:..." payload would be written straight into the backend URL that
      every later request is built from. */
@@ -4511,7 +4570,7 @@ window.CompanionVoice = (function () {
         say(status, 'That computer needs an access token. Scan the dashboard’s code, or paste it.', 'warn');
         return;
       }
-      say(findStatus, 'Could not reach it (' + r.reason + ').', 'bad');
+      say(findStatus, unreachableMessage(candidate), 'bad');
     });
   });
 
@@ -4522,7 +4581,7 @@ window.CompanionVoice = (function () {
   submitBtn.addEventListener('click', function () {
     var url = safeBackendUrl(urlInput.value);
     if (!url) {
-      say(status, 'Enter a full address, like http://192.168.1.20:8000', 'bad');
+      say(status, 'Enter a full address, like https://192.168.1.20:8000', 'bad');
       urlInput.focus();
       return;
     }
@@ -4538,7 +4597,7 @@ window.CompanionVoice = (function () {
         return;
       }
       say(status, r.reason === 'unreachable'
-        ? 'No answer from ' + url.replace(/^https?:\/\//, '') + '.'
+        ? unreachableMessage(url)
         : 'The backend answered with ' + r.reason + '.', 'bad');
     });
   });

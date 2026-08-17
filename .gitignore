@@ -12,6 +12,7 @@ Thumbs.db
 # Runtime state written by start-servers.ps1 (scheme/port the last run chose).
 .backend-scheme
 .frontend-port
+.frontend-ca-port
 
 # Tooling config: the shared files (.claude/launch.json, .impeccable/config.json)
 # describe the project and are committed. The *.local.json ones hold this

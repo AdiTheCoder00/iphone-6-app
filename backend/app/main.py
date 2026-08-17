@@ -41,8 +41,8 @@ from app.models.schemas import (
     WakeRequest,
     WakeResponse,
 )
-from app.middleware import CompanionTokenMiddleware
-from app.services import smart_home, timers, tools, tts
+from app.middleware import TICKET_TTL_SECONDS, CompanionTokenMiddleware, issue_sse_ticket
+from app.services import smart_home, timers, tools, tts, tplink
 from app.services.companion import (
     CompanionUnavailable,
     companion_service,
@@ -59,11 +59,12 @@ logger = logging.getLogger(__name__)
 
 
 class _TokenRedactingFilter(logging.Filter):
-    """Keep the shared secret out of access logs.
+    """Keep the shared secret and SSE tickets out of access logs.
 
-    /events accepts the token as a query parameter (EventSource cannot set
-    headers), so uvicorn's access log would otherwise write it verbatim —
-    and those logs live next to the repo on disk.
+    /events is opened with a short-lived one-time ticket in the query string
+    (EventSource cannot set headers). The ticket is single-use and expires in
+    seconds, but it would still be logged verbatim without this filter — and
+    those logs live next to the repo on disk.
 
     The redaction must rewrite record.args, not record.request_line: uvicorn's
     AccessFormatter builds the final line from args (it copies the record and
@@ -74,7 +75,7 @@ class _TokenRedactingFilter(logging.Filter):
         args = record.args
         if args and len(args) >= 3:
             path = str(args[2])
-            path = re.sub(r"[?&]token=[^&\s]+", "", path)
+            path = re.sub(r"[?&](?:token|ticket)=[^&\s]+", "", path)
             token = settings.companion_token
             if token:
                 path = path.replace(token, "[REDACTED]")
@@ -189,6 +190,7 @@ async def lifespan(app: FastAPI):
     await proactive_service.stop()
     await reminder_service.stop()
     await timers.timer_service.stop()
+    await tplink.shutdown()
     await companion_service.aclose()
     store.close()
 
@@ -198,6 +200,13 @@ app = FastAPI(
     description="Chat core for the desk companion face",
     version="0.1.0",
     lifespan=lifespan,
+    # The API contract is fixed by the two frontends shipped in this repo, so
+    # the interactive docs add no developer value here — and when
+    # COMPANION_TOKEN is unset they would give anyone on the LAN a complete
+    # endpoint map for free. Explicit deny beats a conditional.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 # Local dev only. CORS_ORIGINS defaults to "*" because the frontend is opened
@@ -534,6 +543,14 @@ async def wake_endpoint(body: WakeRequest):
     return WakeResponse(accepted=True)
 
 
+# Whisper transcription is CPU-bound; cap concurrent jobs and bound how long a
+# client waits for a slot so a busy moment (or a LAN client hammering the
+# endpoint) cannot exhaust the worker threadpool or hold connections forever.
+_TRANSCRIBE_SLOTS = 2
+_TRANSCRIBE_WAIT_SECONDS = 30.0
+_transcribe_slots = asyncio.Semaphore(_TRANSCRIBE_SLOTS)
+
+
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe_endpoint(audio: UploadFile = File(...)):
     """Speech-to-text for tap-to-talk.
@@ -555,6 +572,12 @@ async def transcribe_endpoint(audio: UploadFile = File(...)):
         )
 
     try:
+        await asyncio.wait_for(_transcribe_slots.acquire(), timeout=_TRANSCRIBE_WAIT_SECONDS)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503, detail="Transcription is busy — try again in a moment"
+        )
+    try:
         text = await transcription_service.transcribe(data)
     except TranscriptionError as e:
         logger.warning("Transcription rejected: %s", e)
@@ -562,6 +585,8 @@ async def transcribe_endpoint(audio: UploadFile = File(...)):
     except Exception as e:
         logger.error("Transcription failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error") from e
+    finally:
+        _transcribe_slots.release()
 
     # Length only — the transcript itself is user speech and does not belong
     # in the server log.
@@ -655,6 +680,22 @@ async def vision_endpoint(image: UploadFile = File(...)):
     return {"text": text}
 
 
+@app.get("/events-ticket")
+async def events_ticket():
+    """Mint a short-lived, one-time ticket for opening the /events stream.
+
+    EventSource cannot set request headers, so the shared token cannot be sent
+    that way — and sending it in the URL would leak it into browser history,
+    Referer headers and proxy logs. The ticket instead rides the URL, which is
+    safe because it expires in seconds and dies on first use. Minting a ticket
+    itself requires the token in the header.
+    """
+    return {
+        "ticket": issue_sse_ticket(),
+        "expires_in": int(TICKET_TTL_SECONDS),
+    }
+
+
 @app.get("/events")
 async def events(request: Request):
     """Server-sent events: reminders push through here.
@@ -681,10 +722,17 @@ async def events(request: Request):
                 claim_task = asyncio.create_task(
                     asyncio.to_thread(reminder_service.check_reminders)
                 )
+                # Delivery bookkeeping: publish() and the published-set add
+                # stay in one synchronous stretch with no awaits between them,
+                # so a disconnect cannot land between "handed to the queue"
+                # and "recorded as delivered".
+                published: set[int] = set()
                 events, power_actions = await asyncio.shield(claim_task)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
-                    store.mark_delivered(fired["id"])
+                    published.add(fired["id"])
+                for fired in events:
+                    await asyncio.to_thread(store.mark_delivered, fired["id"])
                 # Rows claimed here are marked fired and will not be picked up
                 # by the poll loop — execute them now, exactly as that loop
                 # would, so a scheduled shutdown due during downtime actually
@@ -695,6 +743,9 @@ async def events(request: Request):
                 # The client went away mid-claim. The thread already finished
                 # and marked the rows fired; re-arm them so the next listener
                 # or the poll loop delivers them instead of losing them.
+                # Events already handed to this client's queue are the
+                # delivery — those are NOT re-armed, or they would fire again
+                # at the next listener.
                 try:
                     if not claim_task.done():
                         await asyncio.shield(claim_task)
@@ -702,7 +753,9 @@ async def events(request: Request):
                 except Exception:
                     events, power_actions = [], []
                 for reminder in events + power_actions:
-                    if store.unmark_fired(reminder["id"]):
+                    if reminder["id"] in published:
+                        continue
+                    if await asyncio.to_thread(store.unmark_fired, reminder["id"]):
                         logger.warning(
                             "Re-armed reminder %d after disconnect", reminder["id"]
                         )
@@ -744,9 +797,12 @@ async def chat_endpoint(request: ChatRequest):
         result = await companion_service.chat(request.message, request.history)
     except CompanionUnavailable as e:
         # 503 rather than 500: the frontend treats this as "show the fallback
-        # line and go sad", and it is genuinely a dependency being down.
+        # line and go sad", and it is genuinely a dependency being down. The
+        # detail is the companion's own diagnosis (rate limit, bad key,
+        # unreachable) so the phone can say what actually went wrong instead
+        # of a generic apology.
         logger.warning("Chat unavailable: %s", e)
-        raise HTTPException(status_code=503, detail="Companion is unavailable") from e
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         logger.error("Chat failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error") from e

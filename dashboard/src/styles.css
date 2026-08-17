@@ -4,15 +4,17 @@
 
    Typography and structure still come from "Nocturne", the design system
    pulled in from Claude Design (claude.ai/design) via DesignSync — its palette
-   is purple, so the colours below deliberately depart from it while Inter, the
-   token architecture and the outline-button treatment stay. The custom-property
-   NAMES have never changed, which is what keeps a re-theme a single edit here
-   rather than a sweep through every rule that consumes them. */
+   is purple, so the colours below deliberately depart from it while the
+   system-font stack, the token architecture and the outline-button treatment
+   stay. The custom-property NAMES have never changed, which is what keeps a
+   re-theme a single edit here rather than a sweep through every rule that
+   consumes them. */
 
-/* @import MUST be the first rule in the file (only @charset may precede it) —
-   a browser silently drops any @import that isn't, with no console warning in
-   most engines. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* Inter via Google Fonts is NOT imported here: the dashboard CSP in
+   serve_frontend.py (default-src 'self', style-src 'self' 'unsafe-inline')
+   blocks the remote stylesheet and font files, so the served build silently
+   fell back to system fonts anyway. The stack below IS what ships, and the
+   -system-ui family is the same neo-grotesque DNA Inter was chosen for. */
 
 :root {
   --bg: #05070a;
@@ -48,7 +50,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -621,6 +623,24 @@ body {
 .modal__title { margin: 0; font-size: 17px; font-weight: 600; }
 .modal__sub { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .modal__foot { margin-top: 20px; display: flex; justify-content: flex-end; }
+
+.pair__cert {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.pair__cert__title { margin: 0; font-size: 12.5px; font-weight: 600; }
+.pair__cert__body { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.pair__cert__body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--line);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
 
 .pair__code {
   margin: 20px auto 0;

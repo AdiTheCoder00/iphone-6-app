@@ -26,10 +26,14 @@ In a second terminal, serve the frontend from the repository root:
 python serve_frontend.py --port 8080
 ```
 
-On the phone, open `http://<computer-LAN-IP>:8080/companion.html`, then
+On the phone, open `https://<computer-LAN-IP>:8443/companion.html` (or
+`http://<computer-LAN-IP>:8080/companion.html` when no certs exist), then
 long-press the face to open Settings and change **Backend URL** to
-`http://<computer-LAN-IP>:8000`. `localhost` on the phone refers to the phone,
-not the computer.
+`https://<computer-LAN-IP>:8000` (or `http://…:8000` without certs).
+`localhost` on the phone refers to the phone itself, not the computer — the
+pairing screen says so when a `localhost` address won't answer. A fresh phone
+must install the CA certificate first (see "Tap-to-talk and the service
+worker over HTTPS" above).
 
 `serve_frontend.py` serves **only** the PWA's own files (`companion.html`,
 `qrcode.js`, `sw.js`, `manifest.json`, `icons/`) and the built dashboard
@@ -66,9 +70,16 @@ context, so for the phone they need HTTPS:
 
    (`python frontend_https.py` does the same thing on 8443.)
 
-2. Install `certs/companion-ca.crt` on the phone as a trusted root (Settings >
-   General > VPN & Device Management, or install the profile from a page
-   served over the LAN).
+2. Install `certs/companion-ca.crt` on the phone as a trusted root:
+   - Open `http://<computer-LAN-IP>:8081/ca.crt` in Safari on the phone
+     (`serve_frontend.py` serves this over plain HTTP even though the PWA is
+     HTTPS — a phone that has not trusted the CA cannot fetch anything over
+     HTTPS yet, so the certificate has to come over HTTP first). Or AirDrop /
+     email the file.
+   - Settings > General > VPN & Device Management, install the profile.
+   - Settings > General > About > Certificate Trust Settings, enable **full
+     trust** for the Companion Local CA. Installing the profile alone is not
+     enough — without full trust the backend still answers "no answer".
 3. Open `https://<computer-LAN-IP>:8443/companion.html` on the phone. `start-servers.ps1` picks HTTPS automatically when `certs/companion-server.crt` exists.
 4. The backend must use the same scheme: iOS blocks fetch/EventSource to a
    plain-HTTP backend from an HTTPS page (mixed content). `start-servers.ps1`
@@ -139,6 +150,12 @@ The board wakes the backend over HTTPS, trusting the CA cert embedded in
 `config.h`. Regenerating the CA chain (see the certs section above) therefore
 requires updating `BACKEND_CA_CERT` and reflashing the board — the sketch
 cannot otherwise trust the new certificate.
+
+The sketch arms the ESP32 loop-task watchdog (15s timeout) so a wedged TLS
+handshake or I2S driver reboots the board instead of freezing it silently;
+boot-time config errors still halt visibly, one message per boot. Set
+`DEBUG_LEVELS` to `false` in `wake_esp32s3.ino` once the detector is tuned —
+per-block serial printing is its own small load.
 
 ## Notes
 

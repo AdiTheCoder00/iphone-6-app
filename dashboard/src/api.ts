@@ -2,8 +2,9 @@
  *
  * Every call carries the shared token in X-Companion-Token, matching
  * companion.html and the ESP32 firmware. /events is the exception: an
- * EventSource cannot set request headers, so the backend also accepts the
- * token as a query parameter on that one read-only endpoint. */
+ * EventSource cannot set request headers, so the stream opens with a
+ * short-lived one-time ticket minted by /events-ticket — never the token
+ * itself, which must not ride a URL. */
 
 import type {
   ChatMessage,
@@ -149,10 +150,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ turn_on: turnOn }),
     }),
+  /* One-time ticket for opening an /events stream (see eventsUrl). */
+  eventsTicket: (s: Settings) =>
+    request<{ ticket: string; expires_in: number }>(s, '/events-ticket'),
 };
 
-/* EventSource has no API for request headers, hence the query parameter. */
-export function eventsUrl(settings: Settings): string {
-  const url = base(settings) + '/events';
-  return settings.token ? `${url}?token=${encodeURIComponent(settings.token)}` : url;
+/* EventSource has no API for request headers, hence the query parameter. The
+ * ticket is single-use and expires in seconds, so it is safe in a URL where
+ * the shared token is not. */
+export function eventsUrl(settings: Settings, ticket: string): string {
+  return `${base(settings)}/events?ticket=${encodeURIComponent(ticket)}`;
 }

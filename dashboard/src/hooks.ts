@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { UnauthorizedError, eventsUrl, type Settings } from './api';
+import { UnauthorizedError, api, eventsUrl, type Settings } from './api';
 import type { CompanionEvent } from './types';
 
 export interface Poll<T> {
@@ -179,14 +179,42 @@ export function useEvents(settings: Settings, limit = 50) {
       }, wait);
     };
 
-    const connect = () => {
-      if (closed) return;
+    /* connect() is async (it mints a ticket first), so a second caller could
+     * otherwise pass the guards while the first is still dialling and open a
+     * duplicate stream. The flag serialises it. */
+    let connecting = false;
+
+    const connect = async () => {
+      if (closed || connecting) return;
+      connecting = true;
+      /* EventSource cannot set headers, so the stream opens with a one-time
+       * ticket minted by the token-protected /events-ticket endpoint. A
+       * ticket failure (backend down, wrong token) follows the same backoff
+       * path as a dropped stream. */
+      let url: string;
       try {
-        source = new EventSource(eventsUrl(settings));
+        const ticket = await api.eventsTicket(settings);
+        url = eventsUrl(settings, ticket.ticket);
       } catch {
+        connecting = false;
         scheduleRetry();
         return;
       }
+      /* Settings changed while the ticket was being minted: the effect
+       * cleanup closed this attempt, so its ticket must not open a stream
+       * pointing at the old backend. */
+      if (closed) {
+        connecting = false;
+        return;
+      }
+      try {
+        source = new EventSource(url);
+      } catch {
+        connecting = false;
+        scheduleRetry();
+        return;
+      }
+      connecting = false;
 
       source.onopen = () => {
         /* A real connection resets the backoff, the failure counter, and any

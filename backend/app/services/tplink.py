@@ -188,3 +188,18 @@ async def is_available() -> bool:
         return _cached_at > 0 and len(_cache) > 0
     except Exception:
         return False
+
+
+async def shutdown() -> None:
+    """Cancel any in-flight background scan at server shutdown.
+
+    Without this, a pending discovery would outlive the event loop and log
+    "Task was destroyed but it is pending" on exit.
+    """
+    global _background_scan
+    if _background_scan is not None and not _background_scan.done():
+        _background_scan.cancel()
+        try:
+            await asyncio.shield(_background_scan)
+        except (asyncio.CancelledError, Exception):
+            pass

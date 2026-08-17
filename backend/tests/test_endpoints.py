@@ -102,15 +102,40 @@ def test_header_token_accepted():
     assert r.status_code == 200
 
 
-def test_events_accepts_token_in_query():
-    """/events is the documented exception: EventSource cannot set headers,
-    so the token rides the query string on this one read-only endpoint."""
-    r = _middleware_client().get(f"/events?token={TEST_TOKEN}")
+def test_events_accepts_one_time_ticket(client):
+    """/events is the one URL-event hook that cannot set headers: EventSource
+    has no header API. The shared token never rides the URL — instead the
+    token-protected /events-ticket endpoint mints a short-lived one-time
+    ticket, and /events accepts that."""
+    from app.middleware import issue_sse_ticket
+
+    ticket = issue_sse_ticket()
+    r = _middleware_client().get(f"/events?ticket={ticket}")
     assert r.status_code == 200
+    # Single use: the same ticket must not open a second connection.
+    r = _middleware_client().get(f"/events?ticket={ticket}")
+    assert r.status_code == 401
+
+
+def test_events_rejects_bogus_ticket(client):
+    r = _middleware_client().get("/events?ticket=not-a-real-ticket")
+    assert r.status_code == 401
+
+
+def test_events_ticket_endpoint_requires_token(client):
+    assert client.get("/events-ticket").status_code == 401
+
+
+def test_events_ticket_endpoint_returns_ticket(client, authed_headers):
+    r = client.get("/events-ticket", headers=authed_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ticket"]
+    assert body["expires_in"] > 0
 
 
 def test_query_token_rejected_on_other_routes():
-    """The query-token escape hatch exists for /events and nowhere else."""
+    """The query escape hatch exists for /events tickets and nowhere else."""
     r = _middleware_client().get(f"/reminders?token={TEST_TOKEN}")
     assert r.status_code == 401
 

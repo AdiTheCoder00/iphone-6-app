@@ -95,7 +95,29 @@ static const float  NOISE_ADAPT = 0.02f;
 static const uint32_t COOLDOWN_MS = 4000;
 
 /* Set false once tuned — printing every block is itself a small load. */
-static const bool DEBUG_LEVELS = true;
+static const bool DEBUG_LEVELS = false;
+
+/* The loop-task watchdog: a hang anywhere in loop() (a wedged TLS handshake,
+ * a stuck I2S driver) otherwise freezes the board silently forever on a
+ * mains-powered desk device nobody is watching. Timeout is 15s, NOT the core
+ * default of 5s: postWake() blocks the loop for up to ~5s (2s connect + 3s
+ * timeout) on a healthy but slow backend, so the default would false-trigger
+ * a reboot mid-POST.
+ *
+ * The boot-time halt loops (placeholder token, mic failure) feed the WDT
+ * themselves so a misconfigured board still halts visibly with one error
+ * message instead of rebooting into a spam cycle. */
+static void armWatchdog() {
+  esp_task_wdt_init(15, true);
+  esp_task_wdt_add(NULL);
+}
+static void halt(const char* why) {
+  Serial.println(why);
+  while (true) {
+    esp_task_wdt_reset();
+    delay(1000);
+  }
+}
 
 /* ========================================================================= */
 
@@ -193,15 +215,15 @@ void setup() {
   delay(400);                       // let USB CDC enumerate before printing
   Serial.println("\n[boot] companion wake trigger");
 
+  armWatchdog();
+
   if (strcmp(BACKEND_TOKEN, "PASTE_COMPANION_TOKEN_HERE") == 0) {
-    Serial.println("[config] BACKEND_TOKEN is still the placeholder — set your real token in config.h");
-    while (true) delay(1000);       // fail fast, visibly, instead of flashing a 401ing board
+    halt("[config] BACKEND_TOKEN is still the placeholder — set your real token in config.h");
   }
 
   ensureWiFi();                     // kicks off the attempt, returns immediately
   if (!startMicrophone()) {
-    Serial.println("[boot] microphone unavailable — halted");
-    while (true) delay(1000);
+    halt("[boot] microphone unavailable — halted");
   }
 }
 
@@ -280,7 +302,10 @@ static void postWake() {
    * --ssl-* to uvicorn), so a plain HTTPClient would send the token into a
    * TLS port and fail every wake. WiFiClientSecure pins the server to the CA
    * pasted into config.h (BACKEND_CA_CERT) — regenerating the CA on the PC
-   * means reflashing this board. */
+   * means reflashing this board. If certs are ever removed and the backend
+   * falls back to plain HTTP on :8000, every POST here fails with a TLS
+   * error (visible in serial) until this line and the https:// below are
+   * changed to match — the two must never disagree. */
   WiFiClientSecure client;
   client.setCACert(BACKEND_CA_CERT);
 

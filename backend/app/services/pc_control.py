@@ -14,6 +14,7 @@ Nothing here is destructive. The worst outcome of a misrouted call is that
 music pauses or the screen locks.
 """
 
+import asyncio
 import ctypes
 import logging
 import re
@@ -452,7 +453,11 @@ def _ps_literal(value: str) -> str:
 
 
 def _run_powershell(script: str) -> str:
-    """Run a fixed PowerShell script, returning stdout. Never raises."""
+    """Run a fixed PowerShell script, returning stdout.
+
+    Raises PCControlError when powershell itself fails or the script exits
+    non-zero, so callers never mistake a failed script for an empty result.
+    """
     import subprocess
 
     try:
@@ -473,6 +478,12 @@ def _run_powershell(script: str) -> str:
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise PCControlError(f"powershell failed ({e})") from e
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise PCControlError(
+            f"powershell exited {result.returncode}"
+            + (f": {detail[:200]}" if detail else "")
+        )
     return result.stdout
 
 

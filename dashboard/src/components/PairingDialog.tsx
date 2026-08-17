@@ -7,6 +7,19 @@ interface Props {
   onClose: () => void;
 }
 
+/* A phone that has not yet trusted the local CA cannot connect to any HTTPS
+ * page or API on this machine (iOS rejects the TLS handshake outright), so a
+ * fresh phone must install the root certificate first. The certificate
+ * download is served over plain HTTP precisely so an untrusting phone can
+ * reach it: serve_frontend.py's side listener on :8081 serves only /ca.crt,
+ * never keys. */
+function certInstallUrl(): string | null {
+  if (typeof window === 'undefined' || !window.location || !window.location.hostname) {
+    return null;
+  }
+  return `http://${window.location.hostname}:8081/ca.crt`;
+}
+
 /* The scanned payload (mockups 1d/3c).
  *
  * Self-describing JSON rather than a bare URL: the phone's pairing screen
@@ -35,6 +48,11 @@ export function PairingDialog({ settings, onClose }: Props) {
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [drawError, setDrawError] = useState<string | null>(null);
+
+  /* This page is over HTTPS whenever certs exist (the only case the phone
+   * needs to install one), so the block only shows then. */
+  const https = typeof window !== 'undefined' && window.location?.protocol === 'https:';
+  const certUrl = https ? certInstallUrl() : null;
 
   /* An element cannot animate while unmounting, so the close is held for the
    * length of the exit and the dialog renders a closing state meanwhile. This
@@ -166,6 +184,18 @@ export function PairingDialog({ settings, onClose }: Props) {
         <p className="modal__sub">
           Open the companion on your phone and scan this from its pairing screen.
         </p>
+
+        {certUrl ? (
+          <div className="pair__cert">
+            <p className="pair__cert__title">New phone? Install the certificate first</p>
+            <p className="pair__cert__body">
+              The backend uses a self-signed certificate. On the phone, open{' '}
+              <code>{certUrl}</code>, install the profile, then enable full
+              trust under Settings › General › About › Certificate Trust
+              Settings. Without this the phone gets “no answer”.
+            </p>
+          </div>
+        ) : null}
 
         <div className="pair__code">
           {drawError ? (

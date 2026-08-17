@@ -88,9 +88,9 @@ class Settings(BaseSettings):
     # TTS_MODEL_DIR and download on first use if absent.
     tts_enabled: bool = Field(True, validation_alias="TTS_ENABLED")
     tts_model_dir: str = Field("data/tts", validation_alias="TTS_MODEL_DIR")
-    # af_heart is kokoro's warm English female voice. Full list in the
+    # am_michael is kokoro's warm American male voice. Full list in the
     # kokoro-onnx voices file; af_* / am_* are American, bf_* / bm_* British.
-    tts_voice: str = Field("af_heart", validation_alias="TTS_VOICE")
+    tts_voice: str = Field("am_michael", validation_alias="TTS_VOICE")
     tts_speed: float = Field(1.0, ge=0.5, le=2.0, validation_alias="TTS_SPEED")
 
     # Persistence. One SQLite file for reminders and conversation history.

@@ -9,7 +9,9 @@
 # worker on iOS - and plain HTTP on 8080 otherwise. The backend follows the
 # same rule: HTTPS on 8000 when the cert exists (iOS blocks fetch/EventSource
 # to a plain-HTTP backend from an HTTPS page as mixed content), plain HTTP
-# otherwise.
+# otherwise. With certs present, the frontend also runs a plain-HTTP side
+# listener on 8081 that serves only the public CA certificate, so a phone can
+# install it before it trusts the HTTPS servers.
 #
 # Cert state can change between runs (certs generated or removed). Instances
 # started on the previous scheme/port would keep serving a stale origin, so
@@ -129,8 +131,12 @@ if (-not $backendRunning) {
 
 # --- frontend ---
 $frontPort = 8443
+$frontArgs = 'serve_frontend.py --port 8443 --cert-dir certs'
 if ($hasCert) {
-  $frontArgs = 'serve_frontend.py --port 8443 --cert-dir certs'
+  # Plain-HTTP side listener for the CA certificate download (see
+  # serve_frontend.py). A phone that has not yet trusted the CA cannot fetch
+  # anything over HTTPS, so the public root cert is served over http:8081.
+  $frontArgs += ' --ca-port 8081'
 } else {
   $frontPort = 8080
   $frontArgs = 'serve_frontend.py --port 8080'
@@ -152,6 +158,26 @@ if (-not $frontRunning -and $previousPort -and $previousPort -ne $frontPort -and
   if ($proc -and (Is-CompanionProcess $proc.Id)) {
     Stop-Process -Id $proc.Id -Force
     Write-Host "Stopped stale frontend on :$previousPort (port changed to :$frontPort)"
+    $frontRunning = $false
+  }
+}
+
+# An instance started before --ca-port existed serves the PWA but not the
+# certificate download; the phone would stall on "install the profile from a
+# page served over the LAN". Restart it if the CA port is missing.
+$caPortMarker = Join-Path $root '.frontend-ca-port'
+$previousCaPort = $null
+if (Test-Path $caPortMarker) {
+  $previousCaPort = (Get-Content $caPortMarker).Trim()
+  if ($previousCaPort -notmatch '^\d+$') { $previousCaPort = $null }
+}
+if ($frontRunning -and $hasCert -and -not (Test-PortListening 8081)) {
+  $conn = Get-NetTCPConnection -LocalPort $frontPort -State Listen | Select-Object -First 1
+  $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+  if ($proc -and (Is-CompanionProcess $proc.Id)) {
+    Stop-Process -Id $proc.Id -Force
+    $frontRunning = $false
+    Write-Host "Stopped frontend without CA download (missing :8081) - restarting"
   }
 }
 
@@ -162,6 +188,7 @@ if (-not $frontRunning) {
     -WorkingDirectory $root -WindowStyle Hidden `
     -RedirectStandardOutput $frontOut -RedirectStandardError $frontErr
   Set-Content -Path $frontPortMarker -Value $frontPort
+  if ($hasCert) { Set-Content -Path $caPortMarker -Value '8081' }
   Write-Host "Started frontend on :$frontPort"
 } else {
   Write-Host "Frontend already listening on :$frontPort - skipped"

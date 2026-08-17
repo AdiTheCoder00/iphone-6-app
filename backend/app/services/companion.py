@@ -1,4 +1,5 @@
 import asyncio
+import email.utils
 import json
 import logging
 import re
@@ -14,7 +15,14 @@ logger = logging.getLogger(__name__)
 
 # How many prior turns to replay. The companion only needs enough to follow the
 # current thread; a long tail costs prompt tokens on every request.
-HISTORY_TURNS = 12
+HISTORY_TURNS = 6
+
+# How long a 429 retry may wait before giving up. Groq's free-tier TPM budget
+# is 8k/min and a single turn can cost ~3.5k, so a rate limit typically clears
+# within a few seconds to half a minute. Anything longer suggests the budget is
+# genuinely exhausted for the minute and a second wait would be a third of the
+# frontend's 75s chat timeout.
+RATE_LIMIT_RETRY_CAP_SECONDS = 30.0
 
 # Tool calls allowed per user message before the model is forced to answer.
 # Two covers the realistic chains (look something up, then act on it) while
@@ -285,6 +293,28 @@ class CompanionUnavailable(RuntimeError):
     """Groq could not be reached, or returned something unusable."""
 
 
+def _retry_after(response: httpx.Response) -> float:
+    """Seconds to wait before retrying a 429, from the provider's own word.
+
+    Prefers the Retry-After header (RFC 7231: an integer number of seconds, or
+    an HTTP-date), then Groq's body copy "Please try again in 17.775s". Bounded
+    by RATE_LIMIT_RETRY_CAP_SECONDS so a broken answer cannot stall a turn.
+    """
+    header = response.headers.get("Retry-After", "")
+    if header:
+        if header.isdigit():
+            return min(float(header), RATE_LIMIT_RETRY_CAP_SECONDS)
+        try:
+            when = email.utils.parsedate_to_datetime(header).timestamp()
+            return min(max(when - time.time(), 0.0), RATE_LIMIT_RETRY_CAP_SECONDS)
+        except (TypeError, ValueError):
+            pass
+    m = re.search(r"try again in\s+([\d.]+)s", response.text or "", re.IGNORECASE)
+    if m:
+        return min(float(m.group(1)), RATE_LIMIT_RETRY_CAP_SECONDS)
+    return RATE_LIMIT_RETRY_CAP_SECONDS
+
+
 def _strip_wrappers(raw: str) -> str:
     """Remove reasoning blocks and markdown fences from a model response."""
     text = _THINK_BLOCK_RE.sub("", raw)
@@ -491,8 +521,36 @@ class CompanionService:
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as e:
-            self._model_status = "unavailable"
             status = e.response.status_code
+            if status == 429:
+                # Free-tier TPM is tight (qwen3.6-27b: 8k/min, and one turn can
+                # cost ~3.5k), so 429s are a normal part of operation, not an
+                # outage. Groq tells us when to retry — "Please try again in
+                # 17.775s" — so wait that long and try once before giving up.
+                # Capped so a misbehaving or third-party answer cannot stall a
+                # turn (or the whole conversation) for minutes; the frontend's
+                # 75s chat timeout leaves room for one bounded wait.
+                wait = _retry_after(e.response)
+                logger.warning(
+                    "Groq rate limited (%s); retrying once in %.1fs",
+                    e.response.text[:300], wait,
+                )
+                await asyncio.sleep(wait)
+                try:
+                    response = await self._get_client().post(
+                        "/chat/completions", json=body
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                except (httpx.HTTPStatusError, httpx.HTTPError, json.JSONDecodeError):
+                    # Fall through to the shared handling below with the
+                    # original 429 in hand — a single bounded retry is the
+                    # deal, not an infinite loop.
+                    pass
+                else:
+                    if isinstance(data, dict):
+                        return self._validate_choices(data)
+            self._model_status = "unavailable"
             hint = ""
             if status == 401:
                 hint = " (GROQ_API_KEY is missing or invalid)"
@@ -511,10 +569,16 @@ class CompanionService:
             logger.error("Groq returned a non-JSON envelope")
             raise CompanionUnavailable("Groq returned an unreadable response") from e
 
-        # A successful HTTP response is not enough: a proxy or a changed API
-        # version can still return JSON in an unexpected shape. Keep that
-        # implementation detail from escaping as an AttributeError and turning
-        # into a generic 500 at the route.
+        return self._validate_choices(data)
+
+    def _validate_choices(self, data: dict) -> dict:
+        """Turn a raw Groq response envelope into the assistant message dict.
+
+        A successful HTTP response is not enough: a proxy or a changed API
+        version can still return JSON in an unexpected shape. Keep that
+        implementation detail from escaping as an AttributeError and turning
+        into a generic 500 at the route.
+        """
         if not isinstance(data, dict):
             self._model_status = "unavailable"
             logger.error("Groq returned a non-object response envelope")

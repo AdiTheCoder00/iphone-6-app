@@ -252,6 +252,7 @@ class ReminderService:
         # actions are being run every event has been delivered; the flag
         # tells the cancellation handler exactly that.
         published: set[int] = set()
+        claim_task: asyncio.Task | None = None
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
@@ -263,20 +264,42 @@ class ReminderService:
                     asyncio.to_thread(self.check_reminders)
                 )
                 events, power_actions = await asyncio.shield(claim_task)
+                # A listener can only vanish at an await point, so the check,
+                # every publish and the bookkeeping below stay in one
+                # synchronous stretch: once the check reads listeners > 0, no
+                # disconnect can land before every event is in a live queue.
+                # Events claimed by a thread that saw a listener can still hit
+                # zero listeners by now — re-arm those rather than marking
+                # them delivered into the void.
+                if events and event_hub.subscriber_count == 0:
+                    for fired in events:
+                        if store.unmark_fired(fired["id"]):
+                            logger.info(
+                                "Reminder %d re-armed (listener left before delivery)",
+                                fired["id"],
+                            )
+                    events = []
+                published: set[int] = set()
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
-                    # Delivered on this loop: the flag is what lets a later
-                    # startup tell "sent" from "claimed but lost".
-                    store.mark_delivered(fired["id"])
+                    # Set as soon as the events have been handed to
+                    # subscribers. The publish block is synchronous (no await
+                    # points), so once the power actions are being run every
+                    # event has been delivered; the flag tells the
+                    # cancellation handler exactly that.
+                    published.add(fired["id"])
+                for fired in events:
+                    await asyncio.to_thread(store.mark_delivered, fired["id"])
                     logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
-                published = {r["id"] for r in events}
                 for row in power_actions:
                     await self._run_power_action(row)
             except asyncio.CancelledError:
                 try:
-                    if not claim_task.done():
+                    if claim_task is not None and not claim_task.done():
                         await asyncio.shield(claim_task)
-                    events, power_actions = claim_task.result()
+                    events, power_actions = (
+                        claim_task.result() if claim_task is not None else ([], [])
+                    )
                 except Exception:
                     events, power_actions = [], []
                 for reminder in events + power_actions:
@@ -286,7 +309,7 @@ class ReminderService:
                     # itself may never have run.
                     if reminder["id"] in published:
                         continue
-                    if store.unmark_fired(reminder["id"]):
+                    if await asyncio.to_thread(store.unmark_fired, reminder["id"]):
                         logger.warning(
                             "Re-armed reminder %d after shutdown", reminder["id"]
                         )

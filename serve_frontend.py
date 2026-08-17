@@ -13,7 +13,11 @@ Usage:
 
 HTTPS is what unlocks getUserMedia (tap-to-talk) and the service worker on
 iOS; it needs the locally-trusted chain in certs/ (see README) and the phone
-must trust companion-ca.crt first.
+must trust companion-ca.crt first. The phone cannot fetch anything from the
+HTTPS servers before it trusts the CA (chicken and egg), so --cert-dir also
+starts a plain-HTTP side listener (--ca-port 8081) that serves exactly
+/ca.crt — the public root certificate, never the private keys — for the
+phone to install on first run.
 
 The built React dashboard (dashboard/dist, `npm run build`) is served at
 /dashboard/ with a SPA fallback to index.html.
@@ -284,7 +288,62 @@ class CompanionHandler(SimpleHTTPRequestHandler):
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
 
 
-def serve(port: int, cert_dir: Path | None) -> None:
+def _ca_handler_factory(ca_path: Path):
+    """Handler for the plain-HTTP CA download listener.
+
+    Serves exactly /ca.crt (the public root certificate the phone must trust)
+    and a minimal / instruction page — never any private key, never anything
+    else in certs/. The closure pins the cert path at factory time.
+    """
+
+    class _CAHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(ROOT), **kwargs)
+
+        def do_GET(self):
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/":
+                body = (
+                    b"<html><body style='font-family: sans-serif; max-width: 36em; "
+                    b"margin: 4em auto; line-height: 1.6'>"
+                    b"<h1>Companion certificate</h1>"
+                    b"<p>Download <a href='/ca.crt'>companion-ca.crt</a>, then on "
+                    b"iPhone: Settings &gt; General &gt; VPN &amp; Device "
+                    b"Management &gt; install the profile, then enable full trust "
+                    b"under Settings &gt; General &gt; About &gt; Certificate "
+                    b"Trust Settings.</p></body></html>"
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path != "/ca.crt":
+                self.send_error(404, "Not in the CA whitelist")
+                return
+            try:
+                data = ca_path.read_bytes()
+            except OSError:
+                self.send_error(404, "Not found")
+                return
+            self.send_response(200)
+            self.send_header(
+                "Content-Type", "application/x-x509-ca-cert"
+            )
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, fmt, *args):
+            sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
+
+    return _CAHandler
+
+
+def serve(port: int, cert_dir: Path | None, ca_port: int | None = None) -> None:
+    ca_path: Path | None = None
     if cert_dir is not None:
         if not cert_dir.is_absolute():
             cert_dir = ROOT / cert_dir
@@ -312,6 +371,35 @@ def serve(port: int, cert_dir: Path | None) -> None:
         f"(serving only the PWA whitelist, certs={cert_dir or 'none'})",
         flush=True,
     )
+
+    if cert_dir is not None and ca_port is not None:
+        # The chicken-and-egg this side listener exists to break: a phone that
+        # has not yet trusted the CA cannot fetch anything over HTTPS, so the
+        # root certificate has to be reachable over plain HTTP first. Only the
+        # public cert is ever served — never the CA key, never the server key.
+        ca_file = cert_dir / "companion-ca.crt"
+        if ca_file.is_file():
+            ca_server = _ThrottledServer(
+                ("0.0.0.0", ca_port), _ca_handler_factory(ca_file)
+            )
+            thread = threading.Thread(
+                target=ca_server.serve_forever,
+                kwargs={"poll_interval": 0.5},
+                daemon=True,
+            )
+            thread.start()
+            print(
+                f"CA certificate download over http://0.0.0.0:{ca_port}/ca.crt "
+                "(public root cert only)",
+                flush=True,
+            )
+        else:
+            print(
+                f"WARNING: --ca-port {ca_port} requested but {ca_file} missing — "
+                "certificate download disabled",
+                flush=True,
+            )
+
     server.serve_forever()
 
 
@@ -326,8 +414,17 @@ def main() -> None:
         default=None,
         help="Serve HTTPS using the companion-server.{crt,key} pair in this directory",
     )
+    parser.add_argument(
+        "--ca-port",
+        type=int,
+        default=None,
+        help=(
+            "With --cert-dir, also serve /ca.crt over plain HTTP on this port "
+            "so a phone can install the root certificate before it trusts HTTPS"
+        ),
+    )
     args = parser.parse_args()
-    serve(args.port, args.cert_dir)
+    serve(args.port, args.cert_dir, args.ca_port)
 
 
 if __name__ == "__main__":
