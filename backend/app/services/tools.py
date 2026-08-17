@@ -69,8 +69,8 @@ def get(name: str) -> Tool | None:
 
 
 def render_tool_schemas() -> list[dict]:
-    """Ollama's native `tools` format — an OpenAI-style function schema per
-    tool, used for real tool-calling."""
+    """The OpenAI-style function schema per tool — the shape Groq's
+    tool-calling API expects — used for real tool-calling."""
     schemas = []
     for tool in _REGISTRY.values():
         schemas.append(

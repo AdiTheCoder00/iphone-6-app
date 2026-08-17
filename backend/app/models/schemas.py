@@ -39,8 +39,8 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     # The service normalises model output to this ceiling.  Keeping the API
-    # contract bounded protects the small on-device bubble if a local model
-    # ignores its prompt and emits a long completion.
+    # contract bounded protects the small on-device bubble if a model ignores
+    # its prompt and emits a long completion.
     reply: str = Field(..., min_length=1, max_length=600)
     emotion: Emotion
 
@@ -174,10 +174,11 @@ class SmartDevicesResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    ollama_connected: bool
+    llm_connected: bool
     model: str
-    # Distinguishes an API that is reachable but still warming its local model
-    # from one that is actually ready to answer.
-    model_status: Literal["warming", "ready", "unavailable"]
+    # Distinguishes an API that has answered (or verified) its LLM from one
+    # that has not been reached yet. Groq needs no warmup, so this resolves
+    # on the first health probe or request.
+    model_status: Literal["ready", "unavailable"]
     tts_enabled: bool = False
     ha_connected: bool = False

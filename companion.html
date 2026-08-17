@@ -3711,7 +3711,7 @@ async function checkHealth() {
     /* A delayed health result for the old URL must not affect a new target. */
     if (requestBackend !== window.CompanionConfig.backendUrl()) return;
 
-    if (health && health.ollama_connected && health.model_status === 'ready') {
+    if (health && health.llm_connected && health.model_status === 'ready') {
       if (healthy !== true) {
         showRetry(false);
         /* A restored backend may have left a stale bubble hidden by the
@@ -3724,14 +3724,6 @@ window.Companion.settle();
       /* Keep watching: a backend that dies later must surface, not be
          forgotten because it was healthy once at boot. */
       armHealthRetry(HEALTH_IDLE_RETRY_MS);
-      return;
-    }
-
-    if (health && health.ollama_connected && health.model_status === 'warming') {
-      showRetry(true, 'warming up the companion', 'wait');
-      stage.removeAttribute('data-health');
-      healthy = null;
-      armHealthRetry();
       return;
     }
 

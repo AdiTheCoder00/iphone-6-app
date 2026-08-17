@@ -144,9 +144,8 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
-        "Starting Companion API (ollama=%s model=%s)",
-        settings.ollama_base_url,
-        settings.ollama_model,
+        "Starting Companion API (groq model=%s)",
+        settings.groq_chat_model,
     )
     if not settings.companion_token:
         logger.warning(
@@ -167,10 +166,6 @@ async def lifespan(app: FastAPI):
     timers.timer_service.start()
     proactive_service.start()
 
-    # Deliberately not awaited: with Ollama down this waits out its timeout,
-    # and the server must be answering /health long before then. Held in a
-    # local so the task is not garbage-collected mid-flight.
-    prewarm_task = asyncio.create_task(companion_service.prewarm())
     # Same reasoning for TTS: warm the Kokoro session in the background so the
     # first /speak after boot does not pay the load. Never raises. preload()
     # itself no-ops when TTS is disabled, so no download happens then either.
@@ -181,14 +176,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    prewarm_task.cancel()
     tts_preload_task.cancel()
     whisper_preload_task.cancel()
-    # Give the cancelled prewarm request a chance to release its HTTP resources
-    # before the shared client is closed below.  Awaiting it also prevents a
-    # pending-task warning during a fast server restart.
-    with suppress(asyncio.CancelledError):
-        await prewarm_task
+    # Give the cancelled preload requests a chance to release their HTTP
+    # resources before the shared clients are closed below. Awaiting them
+    # also prevents a pending-task warning during a fast server restart.
     with suppress(asyncio.CancelledError):
         await tts_preload_task
     with suppress(asyncio.CancelledError):
@@ -250,17 +242,17 @@ async def _health_probe(coro) -> bool:
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     # Probes run in parallel: the frontend aborts after 5s, and sequential
-    # probes (Ollama 3s + HA 3s) could exceed that on a wedged dependency.
+    # probes (Groq 3s + HA 3s) could exceed that on a wedged dependency.
     # One probe raising must not take the whole health check down — a health
     # endpoint that 500s is useless — so each failure degrades to False.
-    ollama_ok, ha_ok = await asyncio.gather(
+    llm_ok, ha_ok = await asyncio.gather(
         _health_probe(companion_service.is_available()),
         _health_probe(smart_home.is_available()),
     )
     return HealthResponse(
         status="ok",
-        ollama_connected=ollama_ok,
-        model=settings.ollama_model,
+        llm_connected=llm_ok,
+        model=settings.groq_chat_model,
         model_status=companion_service.model_status,
         tts_enabled=settings.tts_enabled,
         ha_connected=ha_ok,
@@ -611,9 +603,27 @@ async def screenshot_endpoint():
             shot.unlink(missing_ok=True)
 
 
+def _guess_image_mime(data: bytes) -> str:
+    """Sniff a photo's MIME type from its magic bytes.
+
+    Groq's vision API needs the image wrapped in a data URL with the right
+    content type; the phone uploads without one, so sniff it here. JPEG is
+    the fallback — that is what a phone camera emits.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if data[:4] == b"GIF8":
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 @app.post("/vision")
 async def vision_endpoint(image: UploadFile = File(...)):
-    """Describe a photo taken on the phone, via the local vision model.
+    """Describe a photo taken on the phone, via the Groq vision model.
 
     The image is the whole context — no conversation, no tools — and the reply
     is plain text the phone renders like any other companion line.
@@ -632,7 +642,9 @@ async def vision_endpoint(image: UploadFile = File(...)):
         )
 
     try:
-        text = await describe_image(base64.b64encode(data).decode())
+        text = await describe_image(
+            base64.b64encode(data).decode(), _guess_image_mime(data)
+        )
     except CompanionUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:

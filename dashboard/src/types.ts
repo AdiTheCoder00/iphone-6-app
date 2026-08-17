@@ -3,11 +3,11 @@
  * machinery than the whole dashboard. If a field here disagrees with the
  * backend, the backend is right. */
 
-export type ModelStatus = 'warming' | 'ready' | 'unavailable';
+export type ModelStatus = 'ready' | 'unavailable';
 
 export interface Health {
   status: string;
-  ollama_connected: boolean;
+  llm_connected: boolean;
   model: string;
   model_status: ModelStatus;
   tts_enabled: boolean;

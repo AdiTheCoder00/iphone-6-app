@@ -89,21 +89,19 @@ export function StatusBar({
     );
   }
 
-  /* "warming" is deliberately not an error: the backend is up and answering,
-   * the local model just is not resident yet. Showing it as a failure would
-   * send you debugging a problem that resolves itself in ~12s. */
+  /* 'unavailable' means the backend is up but the LLM could not be reached
+   * (missing or invalid key, no internet, rate limit) — worth surfacing as a
+   * failure rather than letting the model dot look healthy. */
   const modelOk = health.model_status === 'ready';
   const modelDetail =
-    health.model_status === 'warming'
-      ? `${health.model} · warming up`
-      : health.model_status === 'unavailable'
-        ? `${health.model} · unavailable`
-        : health.model;
+    health.model_status === 'unavailable'
+      ? `${health.model} · unavailable`
+      : health.model;
 
   return (
     <div className="statusbar" role="status" aria-live="polite">
       <Dot ok={health.status === 'ok'} label="Backend" />
-      <Dot ok={health.ollama_connected && modelOk} label="Model" detail={modelDetail} />
+      <Dot ok={health.llm_connected && modelOk} label="Model" detail={modelDetail} />
       <Dot ok={health.tts_enabled} label="Voice" detail={health.tts_enabled ? 'on' : 'off'} />
       <Dot
         ok={health.ha_connected}

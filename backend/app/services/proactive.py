@@ -15,7 +15,7 @@ shouldn't gets unplugged:
      fired and will not repeat inside its own window.
 
 Lines are improvised by the model so they are not identical every morning,
-with a canned fallback when Ollama is down — a silent companion is better
+with a canned fallback when Groq is down — a silent companion is better
 than an error bubble.
 """
 
@@ -135,7 +135,7 @@ class ProactiveService:
     async def _morning_instruction(self) -> str:
         """Morning greeting with today's briefing folded in.
 
-        The briefing assembly never raises and needs no Ollama, so even when
+        The briefing assembly never raises and needs no LLM, so even when
         it is empty (no weather city configured) the greeting itself survives.
         """
         briefing = ""

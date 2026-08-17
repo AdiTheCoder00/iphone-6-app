@@ -233,7 +233,11 @@ class CompanionHandler(SimpleHTTPRequestHandler):
                 404, "dashboard not built — run `npm run build` in dashboard/"
             )
             return True
-        self._send_file(target, "no-cache")
+        # no-store, not just no-cache: iOS 12 Safari demonstrably re-shows a
+        # stale dashboard from cache even on reload, and this page is not part
+        # of the service worker's offline shell, so nothing is lost by
+        # forbidding every cache.
+        self._send_file(target, "no-cache, no-store")
         return True
 
     def do_GET(self):

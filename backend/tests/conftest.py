@@ -28,19 +28,17 @@ def isolated_settings(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_background_preloads(monkeypatch):
-    """The lifespan eagerly preloads Whisper, the LLM and TTS — network calls
-    and GBs of model downloads. Unit tests must never do that, so stub the
-    preloads out for the whole suite. The lazy first-use paths they stand in
-    for are out of scope here and load on first call in production anyway."""
+    """The lifespan eagerly preloads Whisper and TTS — network calls and GBs
+    of model downloads. Unit tests must never do that, so stub the preloads
+    out for the whole suite. The lazy first-use paths they stand in for are
+    out of scope here and load on first call in production anyway."""
     from app.services import tts as tts_module
-    from app.services.companion import companion_service
     from app.services.transcription import transcription_service
 
     async def _noop() -> None:
         return None
 
     monkeypatch.setattr(tts_module, "preload", _noop)
-    monkeypatch.setattr(companion_service, "prewarm", _noop)
     monkeypatch.setattr(transcription_service, "preload", _noop)
 
 

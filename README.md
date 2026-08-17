@@ -2,19 +2,21 @@
 
 A local AI desk companion designed for an iPhone 6/6s-sized display. The UI is
 a small PWA shell (`companion.html`); the FastAPI backend supplies chat,
-reminders, memory, speech-to-text and optional local text-to-speech.
+reminders, memory, speech-to-text and optional local text-to-speech. Chat and
+photo descriptions run on the [Groq](https://groq.com/) API (the only cloud
+dependency); speech recognition and synthesis stay on-device.
 
 ## Run it locally
 
-Requirements: Python 3.11+, [Ollama](https://ollama.com/) running locally, and
-the configured model (by default, `qwen3:8b`).
+Requirements: Python 3.11+ and a Groq API key (create one at
+https://console.groq.com/keys).
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-ollama pull qwen3:8b
+# put GROQ_API_KEY=... in backend/.env (copy .env.example first)
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -106,8 +108,8 @@ any domain — keep it off the network entirely.
 Create `backend/.env` to override settings without changing code:
 
 ```dotenv
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen3:8b
+GROQ_API_KEY=change-me-to-your-groq-key
+GROQ_CHAT_MODEL=llama-3.3-70b-versatile
 COMPANION_TOKEN=change-me-to-a-long-random-string
 TTS_ENABLED=true
 WHISPER_MODEL_SIZE=base

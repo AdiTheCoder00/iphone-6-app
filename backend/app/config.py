@@ -37,13 +37,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Local Ollama, same server guru-rag-app talks to.
-    ollama_base_url: str = Field("http://localhost:11434", validation_alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field("qwen3:8b", validation_alias="OLLAMA_MODEL")
-    # Vision model for /vision (photo descriptions). Pull with:
-    #   ollama pull qwen2.5-vl:7b
-    # The endpoint answers with a clear 503 until the model exists.
-    ollama_vision_model: str = Field("qwen2.5-vl:7b", validation_alias="OLLAMA_VISION_MODEL")
+    # Cloud LLM via Groq's OpenAI-compatible API. The key lives in backend/.env
+    # (gitignored); get one at https://console.groq.com/keys.
+    groq_api_key: str = Field("", validation_alias="GROQ_API_KEY")
+    # Chat model. qwen3.6-27b is the one model on Groq's current catalog that
+    # supports both native tool calling and image input. The service sends
+    # reasoning_effort=none with every call, so its default thinking mode is
+    # disabled and the 200-token reply ceiling is never eaten by reasoning.
+    groq_chat_model: str = Field("qwen/qwen3.6-27b", validation_alias="GROQ_CHAT_MODEL")
+    # Vision model for /vision (photo descriptions). Same model as chat: it is
+    # the only multimodal model on the current Groq catalog. Swap it for
+    # another model id when a dedicated vision model becomes available.
+    groq_vision_model: str = Field("qwen/qwen3.6-27b", validation_alias="GROQ_VISION_MODEL")
 
     # Companion replies are one or two sentences on a 375px screen, so the
     # ceiling is deliberately far below guru-rag-app's 700: it bounds a
@@ -53,26 +58,9 @@ class Settings(BaseSettings):
     # and must not embellish; this one is small talk and should not sound
     # identical every time.
     llm_temperature: float = Field(0.7, validation_alias="LLM_TEMPERATURE")
-    # Short replies on a warm model land in a few seconds; a cold model load
-    # is the slow case this actually covers.
+    # A Groq round trip should land in a couple of seconds; this only covers
+    # a wedged connection or a hung upstream.
     llm_request_timeout: float = Field(60.0, validation_alias="LLM_REQUEST_TIMEOUT")
-
-    # How long Ollama keeps the weights resident after a request. The default
-    # is 5 minutes, which is exactly wrong for a desk companion: it is used in
-    # short bursts with long gaps, so almost every conversation would open by
-    # paying a ~12s cold load before generating a single token.
-    ollama_keep_alive: str = Field("30m", validation_alias="OLLAMA_KEEP_ALIVE")
-    # Load the weights at startup rather than on the first thing the user says.
-    llm_prewarm_enabled: bool = Field(True, validation_alias="LLM_PREWARM_ENABLED")
-    # Bounded so an absent or wedged Ollama leaves a stray task for seconds,
-    # not for the full request timeout.
-    llm_prewarm_timeout: float = Field(45.0, validation_alias="LLM_PREWARM_TIMEOUT")
-
-    # Thinking models (qwen3 among them) spend their token budget in a
-    # <think> block before answering, which both slows the reply and eats the
-    # 200-token ceiling. Ollama exposes a per-request switch; leave it off
-    # unless the configured model has no thinking mode to disable.
-    llm_disable_thinking: bool = Field(True, validation_alias="LLM_DISABLE_THINKING")
 
     # Speech-to-text (tap-to-talk). faster-whisper, same engine as
     # guru-rag-app, but sized for the opposite job: a few seconds of speech

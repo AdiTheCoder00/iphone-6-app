@@ -119,14 +119,14 @@ def test_events_rejects_without_token(client):
     assert client.get("/events").status_code == 401
 
 
-def test_vision_503_when_ollama_unavailable(client, authed_headers, monkeypatch):
+def test_vision_503_when_groq_unavailable(client, authed_headers, monkeypatch):
     """The vision contract test that would have caught the undefined
     one_line() NameError: the endpoint must translate a companion outage
     into a clean 503, never a 500."""
     from app import main
 
-    async def boom(_image_base64):
-        raise CompanionUnavailable("Ollama is unreachable")
+    async def boom(_image_base64, _mime="image/jpeg"):
+        raise CompanionUnavailable("Groq is unreachable")
 
     monkeypatch.setattr(main, "describe_image", boom)
     r = client.post(
@@ -135,13 +135,13 @@ def test_vision_503_when_ollama_unavailable(client, authed_headers, monkeypatch)
         headers=authed_headers,
     )
     assert r.status_code == 503
-    assert "Ollama" in r.json()["detail"]
+    assert "Groq" in r.json()["detail"]
 
 
 def test_vision_200_happy_path(client, authed_headers, monkeypatch):
     from app import main
 
-    async def describe(_image_base64):
+    async def describe(_image_base64, _mime="image/jpeg"):
         return "A cat on a sofa"
 
     monkeypatch.setattr(main, "describe_image", describe)

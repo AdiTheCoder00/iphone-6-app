@@ -29,11 +29,12 @@ floor. Expression is earned on top of it and never at its expense.
 
 ## Positioning
 
-The mechanism a neighbouring product could not truthfully copy is that nothing
-leaves the LAN. The model (Ollama), speech-to-text (faster-whisper), speech
-synthesis (kokoro), memory, and every device it controls are all on hardware
-the owner owns. A cloud assistant cannot make that claim, and a cloud
-assistant is what it is being measured against.
+The mechanism a neighbouring product could not truthfully copy is the whole
+loop around the LLM: the speech-to-text (faster-whisper), speech synthesis
+(kokoro), memory, and every device it controls all run on hardware the owner
+owns, and the only cloud dependency is the model call itself (Groq). A
+cloud assistant cannot make the desk-hardware claim, and a cloud assistant is
+what it is being measured against.
 
 The second is embodiment: a dedicated always-on screen with a face, plus a
 hardware wake trigger, rather than an app you open.
@@ -54,7 +55,7 @@ hardware wake trigger, rather than an app you open.
 
 ## Capabilities and Constraints
 
-Confirmed capabilities: chat against a local model with native tool-calling;
+Confirmed capabilities: chat against a cloud model with native tool-calling;
 durable memory; reminders including recurring ones; tap-to-talk transcription
 and spoken replies; PC control (media transport, volume, lock, app launch,
 now-playing, system stats, opening web pages); smart-home switching; a live
@@ -62,8 +63,11 @@ event stream pushed to the phone; first-run pairing by QR.
 
 Binding constraints, all confirmed by the user:
 
-- **Fully local.** No cloud LLM, no telemetry, no third-party service
-  dependency. Future work must not introduce one.
+- **The cloud stops at the model.** Chat and photo descriptions go to Groq's
+  API; everything else — speech-to-text, speech synthesis, memory, device
+  control — stays local. No telemetry, no other third-party service
+  dependency, and no future feature may widen the cloud footprint (no cloud
+  STT, no cloud TTS, no analytics).
 - **iPhone 6s / iOS 12.** The fixed 375×667 stage stays, as do the iOS 12
   accommodations already in the code (no flex `gap`, no `AbortController`,
   16px minimum font size on inputs to prevent focus zoom). This rules out
@@ -106,8 +110,9 @@ pricing and no deployment story. Future work must not invent any.
 
 1. **Reliability is the floor; expression is earned on top of it.** It is a
    daily driver first and a showpiece second, in that order.
-2. **Nothing leaves the LAN.** Any feature that needs a cloud service is the
-   wrong feature.
+2. **The cloud stays at the model layer.** Speech, memory and device control
+   never leave the LAN; the only outbound call is the model request. Any
+   feature that needs another cloud service is the wrong feature.
 3. **The face is not decoration.** It is the product's identity and the thing
    a redesign must protect.
 4. **The oldest supported device sets the ceiling.** A technique the iPhone 6s

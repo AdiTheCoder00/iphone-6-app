@@ -122,9 +122,9 @@ async def get_kokoro():
 async def preload() -> None:
     """Warm the Kokoro session at startup so the first /speak is instant.
 
-    Mirrors the LLM prewarm: without this, the first spoken reply after boot
-    pays the whole model + phonemizer load. Never raises — on failure the
-    lazy path in get_kokoro() loads on first use anyway.
+    Mirrors the old LLM prewarm: without this, the first spoken reply after
+    boot pays the whole model + phonemizer load. Never raises — on failure
+    the lazy path in get_kokoro() loads on first use anyway.
     """
     if not settings.tts_enabled:
         logger.info("TTS disabled - skipping preload")

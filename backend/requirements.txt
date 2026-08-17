@@ -7,11 +7,10 @@ pydantic>=2.13,<3
 pydantic-settings>=2.14,<3
 python-dotenv>=1.2,<2
 
-# Ollama is called over its own HTTP API rather than through
-# llama-index-llms-ollama. guru-rag-app needs LlamaIndex because it wires the
-# LLM into retrievers, synthesizers and a vector store; this app makes one
-# chat call, so the wrapper would pull ~40 packages to save ~20 lines. Same
-# Ollama server, same OLLAMA_BASE_URL/OLLAMA_MODEL settings.
+# The LLM is called over Groq's OpenAI-compatible HTTP API rather than
+# through an SDK. The groq package would pull the whole OpenAI SDK to save
+# ~20 lines; this app makes one chat call, so raw httpx is all that is
+# needed. Endpoint: https://api.groq.com/openai/v1
 httpx>=0.28,<0.29
 
 # Verify TLS against the OS trust store. Needed because api.open-meteo.com

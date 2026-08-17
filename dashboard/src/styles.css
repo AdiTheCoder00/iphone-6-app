@@ -72,10 +72,14 @@ body {
 .topbar > * + * { margin-left: 20px; }
 
 .brand { display: flex; align-items: center; }
-/* 18px rather than 12: the eyes glyph is wide visually, so the tighter gap
-   made "Companion" read as part of the mark instead of beside it. */
-.brand > * + * { margin-left: 18px; }
-.brand h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
+/* 28px rather than the initial 12: the eyes glyph is wide visually, so the
+   tighter gap made "Companion" read as part of the mark instead of beside
+   it. A generous gap keeps the word clearly separate from the logo. */
+.brand > * + * { margin-left: 14px; }
+/* The gap must live on the h1 itself, not the generic sibling rule: this
+   rule (0,1,1) out-specifies .brand > * + * (0,1,0), so margin: 0 there
+   silently zeroed the gap and no amount of cache-busting could fix it. */
+.brand h1 { margin: 0 0 0 14px; font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
 
 /* The companion's two eyes, shrunk to a logo. */
 .brand__eyes { display: flex; }
