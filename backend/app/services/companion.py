@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 # current thread; a long tail costs prompt tokens on every request.
 HISTORY_TURNS = 6
 
-# How long a 429 retry may wait before giving up. Groq's free-tier TPM budget
-# is 8k/min and a single turn can cost ~3.5k, so a rate limit typically clears
-# within a few seconds to half a minute. Anything longer suggests the budget is
-# genuinely exhausted for the minute and a second wait would be a third of the
-# frontend's 75s chat timeout.
+# Cumulative cap on 429 retry waits for a single Groq call. Free-tier TPM is
+# 8k/min and a turn can cost ~3.5k, so a rate limit usually clears within a few
+# seconds to half a minute. A single turn makes several calls (tool loop +
+# emotion pass), so the cap is shared across retries rather than per attempt —
+# bounded total, never a stall for minutes.
 RATE_LIMIT_RETRY_CAP_SECONDS = 30.0
 
 # Tool calls allowed per user message before the model is forced to answer.
@@ -525,37 +525,45 @@ class CompanionService:
             if status == 429:
                 # Free-tier TPM is tight (qwen3.6-27b: 8k/min, and one turn can
                 # cost ~3.5k), so 429s are a normal part of operation, not an
-                # outage. Groq tells us when to retry — "Please try again in
-                # 17.775s" — so wait that long and try once before giving up.
-                # Capped so a misbehaving or third-party answer cannot stall a
-                # turn (or the whole conversation) for minutes; the frontend's
-                # 75s chat timeout leaves room for one bounded wait.
-                wait = _retry_after(e.response)
-                logger.warning(
-                    "Groq rate limited (%s); retrying once in %.1fs",
-                    e.response.text[:300], wait,
-                )
-                await asyncio.sleep(wait)
-                try:
-                    response = await self._get_client().post(
-                        "/chat/completions", json=body
+                # outage. Groq tells us exactly when the budget resets —
+                # "Please try again in 24.98s" — so keep waiting and retrying
+                # until the wait clears, bounded by a cumulative cap: a turn
+                # runs several of these calls (tool loop + emotion pass), and
+                # the frontend's 75s chat timeout must stay credible.
+                waited = 0.0
+                while status == 429 and waited < RATE_LIMIT_RETRY_CAP_SECONDS:
+                    wait = _retry_after(e.response)
+                    if waited + wait > RATE_LIMIT_RETRY_CAP_SECONDS:
+                        wait = max(RATE_LIMIT_RETRY_CAP_SECONDS - waited, 0.0)
+                    logger.warning(
+                        "Groq rate limited (cumulative wait %.0fs); retrying in %.1fs",
+                        waited, wait,
                     )
-                    response.raise_for_status()
-                    data = response.json()
-                except (httpx.HTTPStatusError, httpx.HTTPError, json.JSONDecodeError):
-                    # Fall through to the shared handling below with the
-                    # original 429 in hand — a single bounded retry is the
-                    # deal, not an infinite loop.
-                    pass
-                else:
-                    if isinstance(data, dict):
+                    await asyncio.sleep(wait)
+                    waited += wait
+                    try:
+                        response = await self._get_client().post(
+                            "/chat/completions", json=body
+                        )
+                        response.raise_for_status()
+                        data = response.json()
                         return self._validate_choices(data)
+                    except httpx.HTTPStatusError as e2:
+                        e = e2
+                        status = e.response.status_code
+                    except (httpx.HTTPError, json.JSONDecodeError):
+                        # Non-429 transport failure on a retry: fall through to
+                        # the shared handling with the original 429 in hand.
+                        break
+                logger.error("Groq returned %s: %s", status, e.response.text[:500])
+                raise CompanionUnavailable(
+                    "Groq rejected the request (rate limit — the free tier's "
+                    "8k tokens/min budget is exhausted; wait a minute)"
+                ) from e
             self._model_status = "unavailable"
             hint = ""
             if status == 401:
                 hint = " (GROQ_API_KEY is missing or invalid)"
-            elif status == 429:
-                hint = " (rate limit — Groq's free tier is roughly 30 req/min)"
             elif status == 404:
                 hint = f" (model '{settings.groq_chat_model}' not found)"
             logger.error("Groq returned %s: %s", status, e.response.text[:500])
