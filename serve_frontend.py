@@ -92,6 +92,27 @@ MAX_HANDLER_THREADS = 32
 # clients down instead of freezing the accept loop entirely.
 SLOT_WAIT_SECONDS = 5
 
+# Windows' mimetypes.guess_type leans on the registry, which drifts: a .js
+# registered as text/plain gets MIME-blocked by the browser the first time a
+# registry edit lands. The handful of file types this whitelist serves are
+# hard-coded; guess_type stays only as the fallback for something unexpected.
+MIME_MAP = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".json": "application/json",
+    ".webmanifest": "application/manifest+json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain; charset=utf-8",
+    ".woff2": "font/woff2",
+}
+
 
 class _ThrottledServer(ThreadingHTTPServer):
     """ThreadingHTTPServer with a cap on concurrent handler threads.
@@ -108,6 +129,14 @@ class _ThrottledServer(ThreadingHTTPServer):
     """
 
     daemon_threads = True
+
+    # Windows SO_REUSEADDR is not Linux's: it lets a SECOND socket bind the
+    # same address instead of failing, so a stale instance and a fresh one
+    # would silently share the port with connections split between them (the
+    # "survivor's origin is a coin flip" hazard in start-servers.ps1).
+    # Defaulting to False makes the duplicate bind raise OSError, which is
+    # the failure mode the start script is built around.
+    allow_reuse_address = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -173,7 +202,9 @@ class CompanionHandler(SimpleHTTPRequestHandler):
         except OSError:
             self.send_error(404, "Not found")
             return
-        content_type, _ = mimetypes.guess_type(target.name)
+        content_type = MIME_MAP.get(target.suffix.lower())
+        if content_type is None:
+            content_type, _ = mimetypes.guess_type(target.name)
         self.send_response(200)
         self.send_header("Content-Type", content_type or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
@@ -300,6 +331,10 @@ def _ca_handler_factory(ca_path: Path):
     class _CAHandler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(ROOT), **kwargs)
+
+        def version_string(self):
+            # Same as CompanionHandler: no runtime advertising on the LAN.
+            return "Companion"
 
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path

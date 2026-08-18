@@ -3919,7 +3919,9 @@ window.CompanionGlance = (function () {
     retry.setAttribute('data-visible', visible ? 'true' : 'false');
     if (text) document.getElementById('retryText').textContent = text;
     retryAction = action || 'connect';
-    connectBackendBtn.textContent = retryAction === 'retry' ? 'Retry' : 'Connect';
+    /* 'Retry' would read as "fix the failure" — but in the model-unavailable
+       state the button just re-probes health while the model warms up. */
+    connectBackendBtn.textContent = retryAction === 'retry' ? 'Check again' : 'Connect';
   }
 
 async function checkHealth() {

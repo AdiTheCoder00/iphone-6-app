@@ -32,8 +32,8 @@ long-press the face to open Settings and change **Backend URL** to
 `https://<computer-LAN-IP>:8000` (or `http://…:8000` without certs).
 `localhost` on the phone refers to the phone itself, not the computer — the
 pairing screen says so when a `localhost` address won't answer. A fresh phone
-must install the CA certificate first (see "Tap-to-talk and the service
-worker over HTTPS" above).
+must install the CA certificate first (see "Tap-to-talk and the service worker
+over HTTPS" below).
 
 `serve_frontend.py` serves **only** the PWA's own files (`companion.html`,
 `qrcode.js`, `sw.js`, `manifest.json`, `icons/`) and the built dashboard
@@ -51,8 +51,9 @@ npm run build   # in dashboard/
 
 Then "open dashboard" opens it on the phone: the dashboard URL lives in
 `backend/.env` as `PC_URL_SHORTCUTS.dashboard` (the shipped default is
-`http://localhost:8080/dashboard/` — edit it to the computer's LAN IP if the
-phone is on a different network).
+`https://<computer-LAN-IP>:8443/dashboard/` — same host and port as the PWA
+itself, so the cert that makes `companion.html` load makes the dashboard load
+too; edit it if the phone is on a different network).
 
 The first use of voice transcription and TTS downloads their local model files;
 the initial response may therefore take longer than later ones.
@@ -120,7 +121,7 @@ Create `backend/.env` to override settings without changing code:
 
 ```dotenv
 GROQ_API_KEY=change-me-to-your-groq-key
-GROQ_CHAT_MODEL=llama-3.3-70b-versatile
+GROQ_CHAT_MODEL=qwen/qwen3.6-27b
 COMPANION_TOKEN=change-me-to-a-long-random-string
 TTS_ENABLED=true
 WHISPER_MODEL_SIZE=base

@@ -15,7 +15,7 @@
 /* Bump this version whenever the shell changes — the browser only checks for
  * a new service worker script on navigation, and an unchanged sw.js can keep
  * a stale companion.html in play for a long time on iOS. */
-const CACHE = 'companion-shell-v13';
+const CACHE = 'companion-shell-v14';
 
 /* Only the shell. API calls live on a different origin and must never be
  * served from cache — a stale reply or a stale reminder would be worse than
@@ -85,6 +85,13 @@ self.addEventListener('fetch', (event) => {
     fetch(request)
       .then((response) => {
         if (response && response.ok) {
+          /* The dashboard is a different app with its own caching rules —
+             its index.html is served no-store on purpose, and its assets
+             are hash-named for long caching. Folding it into the phone
+             shell's cache would bloat the shell and let a cache bump
+             resurrect a stale dashboard. */
+          const path = new URL(request.url).pathname;
+          if (path.startsWith('/dashboard/')) return response;
           const copy = response.clone();
           /* Keep the cache write inside the event's lifetime and swallow
              failures (QuotaExceededError on a low-disk phone, or the put

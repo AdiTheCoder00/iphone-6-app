@@ -59,6 +59,17 @@ function Test-PortListening([int]$port) {
   return ($null -ne $conn)
 }
 
+# A freshly started server has a beat to grab its port before this script
+# writes its marker and reports success: a bind failure (a dying instance's
+# TIME_WAIT, a race) would otherwise leave the marker claiming a live server.
+function Wait-PortListening([int]$port, [int]$seconds = 5) {
+  for ($i = 0; $i -lt ($seconds * 4); $i++) {
+    if (Test-PortListening $port) { return $true }
+    Start-Sleep -Milliseconds 250
+  }
+  return (Test-PortListening $port)
+}
+
 # uvicorn/frontend logs append forever; on a desk machine that runs for
 # months that is unbounded disk growth. Rotate at start, keeping one .1
 # copy. While the server is running the file is open without FILE_SHARE_
@@ -79,6 +90,12 @@ function Is-CompanionProcess([int]$procId) {
   $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
   if (-not $cim) { return $false }
   return (($cim.Name -match 'python') -and ($cim.CommandLine -match 'uvicorn|serve_frontend|frontend_https'))
+}
+
+# taskkill /T fells the whole tree - a wrapper that spawned children would
+# otherwise leave them holding the port after the parent dies.
+function Stop-CompanionProcess([int]$procId) {
+  & taskkill /PID $procId /T /F 2>$null | Out-Null
 }
 
 $cert = Join-Path $root 'certs\companion-server.crt'
@@ -105,7 +122,7 @@ if ($backendRunning -and $previousScheme -and $previousScheme -ne $scheme) {
   $conn = Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object -First 1
   $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
   if ($proc -and (Is-CompanionProcess $proc.Id)) {
-    Stop-Process -Id $proc.Id -Force
+    Stop-CompanionProcess $proc.Id
     $backendRunning = $false
     Write-Host "Stopped stale backend (was $previousScheme, now $scheme)"
   }
@@ -123,8 +140,16 @@ if (-not $backendRunning) {
     -ArgumentList $backendArgs `
     -WorkingDirectory "$root\backend" -WindowStyle Hidden `
     -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr
-  Set-Content -Path $backendSchemeMarker -Value $scheme
-  Write-Host "Started backend on :8000 ($scheme)"
+  # The marker goes down only once the port actually answers: a bind failure
+  # (TIME_WAIT from a just-killed instance, a race) must not leave the marker
+  # claiming a live server, or the next run's scheme-change logic would skip
+  # a stale backend it can no longer find.
+  if (Wait-PortListening 8000) {
+    Set-Content -Path $backendSchemeMarker -Value $scheme
+    Write-Host "Started backend on :8000 ($scheme)"
+  } else {
+    Write-Host "WARNING: backend did not bind :8000 - check backend\uvicorn.err.log" -ForegroundColor Yellow
+  }
 } else {
   Write-Host "Backend already listening on :8000 - skipped"
 }
@@ -143,6 +168,7 @@ if ($hasCert) {
 }
 
 $frontPortMarker = Join-Path $root '.frontend-port'
+$caPortMarker = Join-Path $root '.ca-port'
 $previousPort = $null
 if (Test-Path $frontPortMarker) {
   $previousPort = (Get-Content $frontPortMarker).Trim()
@@ -156,7 +182,7 @@ if (-not $frontRunning -and $previousPort -and $previousPort -ne $frontPort -and
   $conn = Get-NetTCPConnection -LocalPort $previousPort -State Listen | Select-Object -First 1
   $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
   if ($proc -and (Is-CompanionProcess $proc.Id)) {
-    Stop-Process -Id $proc.Id -Force
+    Stop-CompanionProcess $proc.Id
     Write-Host "Stopped stale frontend on :$previousPort (port changed to :$frontPort)"
     $frontRunning = $false
   }
@@ -172,7 +198,7 @@ if ($frontRunning -and $hasCert -and -not (Test-PortListening 8081) -and $previo
   $conn = Get-NetTCPConnection -LocalPort $frontPort -State Listen | Select-Object -First 1
   $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
   if ($proc -and (Is-CompanionProcess $proc.Id)) {
-    Stop-Process -Id $proc.Id -Force
+    Stop-CompanionProcess $proc.Id
     $frontRunning = $false
     Write-Host "Stopped frontend without CA download (missing :8081) - restarting"
   }
@@ -184,11 +210,49 @@ if (-not $frontRunning) {
     -ArgumentList $frontArgs `
     -WorkingDirectory $root -WindowStyle Hidden `
     -RedirectStandardOutput $frontOut -RedirectStandardError $frontErr
-  Set-Content -Path $frontPortMarker -Value $frontPort
-  if ($hasCert) { Set-Content -Path $caPortMarker -Value '8081' }
-  Write-Host "Started frontend on :$frontPort"
+  if (Wait-PortListening $frontPort) {
+    Set-Content -Path $frontPortMarker -Value $frontPort
+    if ($hasCert) { Set-Content -Path $caPortMarker -Value '8081' }
+    Write-Host "Started frontend on :$frontPort"
+  } else {
+    Write-Host "WARNING: frontend did not bind :$frontPort - check frontend.err.log" -ForegroundColor Yellow
+  }
 } else {
   Write-Host "Frontend already listening on :$frontPort - skipped"
+}
+
+# --- DHCP IP drift warning ---------------------------------------------------
+# The TLS cert carries the LAN IP that existed when the CA chain was
+# generated. If DHCP later hands the machine a different IP, the phone's
+# HTTPS fails with a certificate error that reads as "no answer". Warn once
+# per run instead of leaving the user to rediscover it on the phone.
+# (x509.Extensions[].Format() prints the SAN as "IP Address=..." on .NET
+# Framework; the raw bytes of an IP SAN are binary, so this is the parseable
+# route without openssl.)
+$certPath = Join-Path $root 'certs\companion-server.crt'
+if ($hasCert -and (Test-Path $certPath)) {
+  try {
+    $pem = Get-Content -Raw -LiteralPath $certPath
+    $body = (($pem -split '-----BEGIN CERTIFICATE-----')[1] -split '-----END CERTIFICATE-----')[0] -replace '\s', ''
+    $bytes = [Convert]::FromBase64String($body)
+    $x509 = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(,$bytes)
+    $sanIps = @($x509.Extensions | Where-Object { $_.Oid.FriendlyName -eq 'Subject Alternative Name' } |
+      ForEach-Object { $_.Format($false) } | ForEach-Object { $_ -split '[, ]' } |
+      Where-Object { $_ -match '^IP Address=([0-9.]+)$' } |
+      ForEach-Object { $matches[1] })
+    $currentIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and
+        $_.InterfaceAlias -notmatch 'Virtual|vEthernet|Docker|WSL|Loopback|Hyper|Tailscale|Tunnel'
+      } | Sort-Object InterfaceMetric | Select-Object -First 1 -ExpandProperty IPAddress
+    if ($sanIps -and $currentIp -and ($sanIps -notcontains $currentIp)) {
+      Write-Host ("WARNING: the TLS cert was issued for {0} but this machine's LAN IP is now {1} - " +
+        'the phone HTTPS will fail with a certificate error. Regenerate the certs (see README, "Local HTTPS certs").') `
+        -f ($sanIps -join ', '), $currentIp -ForegroundColor Yellow
+    }
+  } catch {
+    # Parsing trouble is not worth failing the whole start script over.
+  }
 }
 
 # Release the single-instance lock. The handle also dies on process exit, so a
