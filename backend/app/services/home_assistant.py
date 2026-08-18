@@ -59,13 +59,24 @@ async def list_devices() -> list[dict]:
         async with _client() as client:
             response = await client.get("/api/states")
             response.raise_for_status()
-            states = response.json()
+            try:
+                states = response.json()
+            except ValueError as e:
+                # A 200 with a non-JSON body (proxy page, different HA version)
+                # must surface as a typed failure, not a raw JSONDecodeError
+                # that escapes into a 500 at the route.
+                raise HomeAssistantError(
+                    "Home Assistant returned an unreadable response"
+                ) from e
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
             raise HomeAssistantError("Home Assistant rejected the token") from e
         raise HomeAssistantError(f"Home Assistant returned {e.response.status_code}") from e
     except httpx.HTTPError as e:
         raise HomeAssistantError(f"Home Assistant is unreachable ({e})") from e
+
+    if not isinstance(states, list):
+        raise HomeAssistantError("Home Assistant returned an unreadable response")
 
     devices = []
     for entity in states:

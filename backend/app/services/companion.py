@@ -551,15 +551,30 @@ class CompanionService:
                     except httpx.HTTPStatusError as e2:
                         e = e2
                         status = e.response.status_code
-                    except (httpx.HTTPError, json.JSONDecodeError):
-                        # Non-429 transport failure on a retry: fall through to
-                        # the shared handling with the original 429 in hand.
-                        break
+                    except json.JSONDecodeError as retry_err:
+                        # The retry came back as HTTP 200 with a non-JSON body.
+                        # A plain json.JSONDecodeError has no .response to
+                        # read, so raise the accurate error instead of falling
+                        # into the 429 handling below.
+                        self._model_status = "unavailable"
+                        raise CompanionUnavailable(
+                            "Groq returned an unreadable response"
+                        ) from retry_err
+                    except httpx.HTTPError as retry_err:
+                        # Non-429 transport failure on a retry: the 429
+                        # handling below would misreport a rate limit that
+                        # never happened.
+                        self._model_status = "unavailable"
+                        raise CompanionUnavailable("Groq is unreachable") from retry_err
                 logger.error("Groq returned %s: %s", status, e.response.text[:500])
-                raise CompanionUnavailable(
-                    "Groq rejected the request (rate limit — the free tier's "
-                    "8k tokens/min budget is exhausted; wait a minute)"
-                ) from e
+                if status == 429:
+                    detail = (
+                        "Groq rate limit (the free tier's 8k tokens/min budget "
+                        "is exhausted; wait a minute)"
+                    )
+                else:
+                    detail = f"Groq rejected the request (HTTP {status})"
+                raise CompanionUnavailable(detail) from e
             self._model_status = "unavailable"
             hint = ""
             if status == 401:
@@ -924,10 +939,13 @@ async def describe_image(image_base64: str, mime: str = "image/jpeg") -> str:
         raise CompanionUnavailable("Groq is unreachable") from e
 
     if response.status_code == 404:
+        companion_service._model_status = "unavailable"
         raise CompanionUnavailable(
             f"Vision model '{model}' is not available on Groq — check GROQ_VISION_MODEL"
         )
     if response.status_code != 200:
+        # Transient statuses (429 rate limit, 5xx) are not "the model is
+        # down" — leave the status alone rather than misreporting /health.
         raise CompanionUnavailable(
             f"Groq returned {response.status_code} for the vision request"
         )
@@ -937,16 +955,24 @@ async def describe_image(image_base64: str, mime: str = "image/jpeg") -> str:
         # Same treatment as _post_chat's envelope check: a 200 with non-JSON
         # body (proxy, different API version) must surface as a typed failure,
         # not a JSONDecodeError escaping into a generic 500 at the route.
+        companion_service._model_status = "unavailable"
         raise CompanionUnavailable("Groq returned an unreadable response") from e
     if not isinstance(data, dict):
+        companion_service._model_status = "unavailable"
         raise CompanionUnavailable("Groq returned an unreadable response")
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
+        companion_service._model_status = "unavailable"
         raise CompanionUnavailable("Groq returned an unreadable response")
     message = choices[0].get("message") or {}
     text = (message.get("content") or "").strip()
     if not text:
+        companion_service._model_status = "unavailable"
         raise CompanionUnavailable("Vision model returned an empty description")
+    # A successful vision round is as good a liveness proof as a chat round:
+    # without this, /health would keep reporting the model unavailable when
+    # the first successful LLM interaction was a /vision call.
+    companion_service._model_status = "ready"
     return one_line(text)
 
 

@@ -42,7 +42,7 @@ from app.models.schemas import (
     WakeResponse,
 )
 from app.middleware import TICKET_TTL_SECONDS, CompanionTokenMiddleware, issue_sse_ticket
-from app.services import smart_home, timers, tools, tts, tplink
+from app.services import smart_home, speaker, timers, tools, tts, tplink
 from app.services.companion import (
     CompanionUnavailable,
     companion_service,
@@ -116,29 +116,38 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     /vision size caps run only after the whole upload has been written out,
     and anyone on the LAN could fill the disk with repeated large POSTs.
 
+    Each path is capped at its own limit: using a shared bound of the larger
+    of the two would let an upload that the smaller endpoint must reject be
+    spooled to disk before the endpoint's 413 check runs — the very disk-fill
+    scenario this middleware exists to prevent.
+
     Content-Length covers the whole multipart envelope for /vision (the
     image itself is capped again inside the endpoint). A chunked upload sends
     no Content-Length, so it is not stopped here — a streaming read cap would
     be needed for that, which Starlette's middleware API does not expose.
     """
 
-    def __init__(self, app, max_bytes: int) -> None:
+    def __init__(self, app) -> None:
         super().__init__(app)
-        self._max_bytes = max_bytes
+        # Per-path cap (bytes). The middleware can read settings at request
+        # time too, but binding them once here keeps the dispatch branch cheap.
+        self._caps = {
+            "/transcribe": settings.max_audio_mb * 1024 * 1024,
+            "/vision": settings.max_image_mb * 1024 * 1024,
+        }
 
     async def dispatch(self, request, call_next):
-        if (
-            request.method == "POST"
-            and request.url.path in ("/transcribe", "/vision")
-        ):
-            length = request.headers.get("content-length")
-            if length and length.isdigit() and int(length) > self._max_bytes:
-                what = (
-                    f"Audio exceeds {settings.max_audio_mb} MB limit"
-                    if request.url.path == "/transcribe"
-                    else f"Image exceeds {settings.max_image_mb} MB limit"
-                )
-                return JSONResponse({"detail": what}, status_code=413)
+        if request.method == "POST":
+            limit = self._caps.get(request.url.path)
+            if limit is not None:
+                length = request.headers.get("content-length")
+                if length and length.isdigit() and int(length) > limit:
+                    what = (
+                        f"Audio exceeds {settings.max_audio_mb} MB limit"
+                        if request.url.path == "/transcribe"
+                        else f"Image exceeds {settings.max_image_mb} MB limit"
+                    )
+                    return JSONResponse({"detail": what}, status_code=413)
         return await call_next(request)
 
 
@@ -227,16 +236,14 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["X-Companion-Token", "Content-Type", "Accept"],
+    # X-Speaker rides /speak responses so the phone knows whether it is the
+    # speaker of record and must mute itself. Exposed for the same reason
+    # the allow list is explicit: iOS 12 Safari rejects wildcards here too.
+    expose_headers=["X-Speaker"],
 )
 # Registered last so it runs outermost: reject before auth, spooling or CORS
 # handling — the check is header-only and reveals nothing.
-app.add_middleware(
-    BodySizeLimitMiddleware,
-    # One shared bound for both upload paths; the endpoint caps below are the
-    # authoritative per-path limits, so the middleware uses the larger of the
-    # two rather than rejecting valid images when max_image_mb > max_audio_mb.
-    max_bytes=max(settings.max_audio_mb, settings.max_image_mb) * 1024 * 1024,
-)
+app.add_middleware(BodySizeLimitMiddleware)
 
 
 async def _health_probe(coro) -> bool:
@@ -264,6 +271,7 @@ async def health_check():
         model=settings.groq_chat_model,
         model_status=companion_service.model_status,
         tts_enabled=settings.tts_enabled,
+        speaker=settings.speaker,
         ha_connected=ha_ok,
     )
 
@@ -275,6 +283,12 @@ async def speak_endpoint(body: SpeakRequest):
     Separate from /chat on purpose: the chat contract stays {reply, emotion},
     and the frontend decides whether to ask for audio at all (it does not when
     the device is dimmed or sleeping).
+
+    With SPEAKER=pc the clip is also played on the PC's default output device
+    (e.g. an Echo in Bluetooth speaker mode), and the X-Speaker header tells
+    the phone to mute itself while keeping the audio to pace the face. The
+    header says "phone" when local playback could not start, so the reply is
+    never lost to a dead speaker.
     """
     if not settings.tts_enabled:
         raise HTTPException(status_code=503, detail="TTS is disabled")
@@ -286,11 +300,26 @@ async def speak_endpoint(body: SpeakRequest):
     except Exception as e:
         logger.error("TTS failed: %s", e, exc_info=True)
         raise HTTPException(status_code=502, detail="Speech synthesis failed") from e
-    return Response(
-        content=audio,
-        media_type="audio/wav",
-        headers={"Cache-Control": "no-store"},
-    )
+    headers = {"Cache-Control": "no-store"}
+    if settings.speaker == "pc":
+        headers["X-Speaker"] = "pc" if speaker.play(audio) else "phone"
+    return Response(content=audio, media_type="audio/wav", headers=headers)
+
+
+@app.post("/chime")
+async def chime_endpoint():
+    """Play the timer ding on the PC speaker.
+
+    The phone-side chime is Web Audio and exists only on the phone, so when
+    the PC is the speaker of record the finished-timer ding must come from
+    here instead — otherwise it would chime quietly on the phone and the
+    spoken line would boom from across the desk.
+    """
+    if settings.speaker != "pc":
+        raise HTTPException(status_code=503, detail="SPEAKER is not set to pc")
+    if not speaker.play_chime():
+        raise HTTPException(status_code=502, detail="Could not play on the local speaker")
+    return {"played": True}
 
 
 @app.get("/reminders", response_model=RemindersResponse)
@@ -727,6 +756,11 @@ async def events(request: Request):
                 # so a disconnect cannot land between "handed to the queue"
                 # and "recorded as delivered".
                 published: set[int] = set()
+                # Power rows whose action was handed to a thread: to_thread
+                # runs to completion even when this generator is cancelled
+                # mid-await, so an id in here has actually executed and must
+                # never be re-armed.
+                executed: set[int] = set()
                 events, power_actions = await asyncio.shield(claim_task)
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
@@ -738,6 +772,10 @@ async def events(request: Request):
                 # would, so a scheduled shutdown due during downtime actually
                 # happens instead of being silently dropped.
                 for row in power_actions:
+                    # Recorded before the await: to_thread completes the
+                    # action even if the client disconnects mid-await, so the
+                    # cancellation handler must treat the row as done.
+                    executed.add(row["id"])
                     await reminder_service._run_power_action(row)
             except asyncio.CancelledError:
                 # The client went away mid-claim. The thread already finished
@@ -745,7 +783,9 @@ async def events(request: Request):
                 # or the poll loop delivers them instead of losing them.
                 # Events already handed to this client's queue are the
                 # delivery — those are NOT re-armed, or they would fire again
-                # at the next listener.
+                # at the next listener. Power rows already handed to a thread
+                # HAVE run — those are not re-armed either, or the sleep/
+                # shutdown would fire a second time at the next listener.
                 try:
                     if not claim_task.done():
                         await asyncio.shield(claim_task)
@@ -753,7 +793,7 @@ async def events(request: Request):
                 except Exception:
                     events, power_actions = [], []
                 for reminder in events + power_actions:
-                    if reminder["id"] in published:
+                    if reminder["id"] in published or reminder["id"] in executed:
                         continue
                     if await asyncio.to_thread(store.unmark_fired, reminder["id"]):
                         logger.warning(

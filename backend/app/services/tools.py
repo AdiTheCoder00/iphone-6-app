@@ -303,7 +303,7 @@ def _next_occurrence(hour: int, minute: int) -> float:
     return when.timestamp()
 
 
-def _set_reminder(
+async def _set_reminder(
     text: str,
     minutes_from_now: int | None = None,
     repeat: str | None = None,
@@ -332,7 +332,9 @@ def _set_reminder(
         if hour > 23 or minute > 59:
             return "ERROR: at must be a valid time, e.g. '19:00'"
         fire = _next_occurrence(hour, minute)
-        reminder = reminder_service.add_at(text, fire, repeat=repeat)
+        reminder = await asyncio.to_thread(
+            reminder_service.add_at, text, fire, repeat
+        )
         when = datetime.fromtimestamp(fire).strftime("%I:%M %p").lstrip("0")
         suffix = f", repeating {repeat}" if repeat else ""
         return f"Reminder set: '{text}' at {when}{suffix}."
@@ -347,7 +349,9 @@ def _set_reminder(
     if minutes < 0:
         return "ERROR: minutes_from_now cannot be negative"
 
-    reminder = reminder_service.add(text, minutes, repeat=repeat)
+    reminder = await asyncio.to_thread(
+        reminder_service.add, text, minutes, repeat
+    )
     when = reminder["fire_time_dt"].strftime("%I:%M %p").lstrip("0")
     suffix = f", repeating {repeat}" if repeat else ""
     return f"Reminder set: '{text}' in {minutes} minute(s), at {when}{suffix}."
@@ -400,10 +404,10 @@ def _format_reminder(reminder: dict) -> str:
     return f"[{reminder['id']}] {reminder['text']} at {stamp}"
 
 
-def _list_reminders() -> str:
+async def _list_reminders() -> str:
     from app.services.reminders import reminder_service
 
-    pending = reminder_service.pending()
+    pending = await asyncio.to_thread(reminder_service.pending)
     if not pending:
         return "No reminders are set."
     return "Pending reminders:\n" + "\n".join(_format_reminder(r) for r in pending)
@@ -420,7 +424,7 @@ register(
 )
 
 
-def _cancel_reminder(reminder_id: int | None = None, text: str | None = None) -> str:
+async def _cancel_reminder(reminder_id: int | None = None, text: str | None = None) -> str:
     from app.services.reminders import reminder_service
 
     if reminder_id is not None:
@@ -430,14 +434,14 @@ def _cancel_reminder(reminder_id: int | None = None, text: str | None = None) ->
             return "ERROR: reminder_id must be a number"
         return (
             f"Cancelled reminder {rid}."
-            if reminder_service.cancel(rid)
+            if await asyncio.to_thread(reminder_service.cancel, rid)
             else f"ERROR: no pending reminder with id {rid}"
         )
 
     if not text:
         return "ERROR: cancel_reminder needs either reminder_id or text"
 
-    matches = reminder_service.find_pending(text)
+    matches = await asyncio.to_thread(reminder_service.find_pending, text)
     if not matches:
         return f"ERROR: no pending reminder matching '{text}'"
     if len(matches) > 1:
@@ -446,7 +450,7 @@ def _cancel_reminder(reminder_id: int | None = None, text: str | None = None) ->
         return f"Several reminders match '{text}'. Ask which one:\n{listed}"
 
     reminder = matches[0]
-    if reminder_service.cancel(reminder["id"]):
+    if await asyncio.to_thread(reminder_service.cancel, reminder["id"]):
         return f"Cancelled: '{reminder['text']}'."
     return f"ERROR: could not cancel '{reminder['text']}'"
 
@@ -472,7 +476,7 @@ register(
 MAX_FACTS = 40
 
 
-def _remember(fact: str) -> str:
+async def _remember(fact: str) -> str:
     from app.services.store import store
 
     fact = (fact or "").strip()
@@ -480,13 +484,13 @@ def _remember(fact: str) -> str:
         return "ERROR: remember needs something to remember"
     if len(fact) > 200:
         return "ERROR: that is too long to remember; summarise it in one short sentence"
-    if store.fact_count() >= MAX_FACTS:
+    if await asyncio.to_thread(store.fact_count) >= MAX_FACTS:
         return (
             f"ERROR: already remembering the maximum of {MAX_FACTS} things. "
             "Ask the user what to forget first."
         )
 
-    stored = store.add_fact(fact)
+    stored = await asyncio.to_thread(store.add_fact, fact)
     if stored is None:
         return f"Already knew that: '{fact}'."
     return f"Remembered: '{fact}'."
@@ -507,21 +511,21 @@ register(
 )
 
 
-def _forget(text: str) -> str:
+async def _forget(text: str) -> str:
     from app.services.store import store
 
     needle = (text or "").strip().lower()
     if not needle:
         return "ERROR: forget needs to know what to forget"
 
-    matches = [f for f in store.list_facts() if needle in f["text"].lower()]
+    matches = [f for f in await asyncio.to_thread(store.list_facts) if needle in f["text"].lower()]
     if not matches:
         return f"ERROR: nothing remembered matching '{text}'"
     if len(matches) > 1:
         listed = "\n".join(f"[{f['id']}] {f['text']}" for f in matches)
         return f"Several things match '{text}'. Ask which one:\n{listed}"
 
-    store.delete_fact(matches[0]["id"])
+    await asyncio.to_thread(store.delete_fact, matches[0]["id"])
     return f"Forgotten: '{matches[0]['text']}'."
 
 
@@ -653,7 +657,7 @@ async def _get_briefing(city: str | None = None) -> str:
     today = datetime.now().date()
     today_reminders = [
         r
-        for r in reminder_service.pending()
+        for r in await asyncio.to_thread(reminder_service.pending)
         if datetime.fromtimestamp(r["fire_time"]).date() == today
     ]
     if today_reminders:
@@ -819,9 +823,11 @@ def _register_pc_tools() -> None:
         logger.info("PC control tools skipped: not running on Windows")
         return
 
-    def _media(action: str) -> str:
+    async def _media(action: str) -> str:
         try:
-            done = pc_control.media(action)
+            # Tapping a virtual key is a blocking user32 call; keep it off the
+            # event loop (same rule as main.py's dashboard media endpoint).
+            done = await asyncio.to_thread(pc_control.media, action)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return f"Sent '{done}' to whatever is playing."
@@ -944,9 +950,10 @@ def _register_pc_tools() -> None:
         )
     )
 
-    def _copy_to_clipboard(text: str) -> str:
+    async def _copy_to_clipboard(text: str) -> str:
         try:
-            pc_control.set_clipboard(text)
+            # OpenClipboard can block while another process holds the clipboard.
+            await asyncio.to_thread(pc_control.set_clipboard, text)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return "Copied to the clipboard."
@@ -964,9 +971,9 @@ def _register_pc_tools() -> None:
         )
     )
 
-    def _read_clipboard() -> str:
+    async def _read_clipboard() -> str:
         try:
-            content = pc_control.get_clipboard()
+            content = await asyncio.to_thread(pc_control.get_clipboard)
         except pc_control.PCControlError as e:
             return f"ERROR: {e}"
         return f"The clipboard contains: {content}" if content else "The clipboard is empty."
@@ -1149,9 +1156,10 @@ def _register_pc_tools() -> None:
             )
         )
 
-        def _cancel_power() -> str:
+        async def _cancel_power() -> str:
             try:
-                pc_control.cancel_shutdown()
+                # subprocess.run with a 10s timeout — off the loop.
+                await asyncio.to_thread(pc_control.cancel_shutdown)
             except pc_control.PCControlError as e:
                 return f"ERROR: {e}"
             return "Cancelled the pending shutdown, if there was one."
@@ -1171,7 +1179,7 @@ def _register_pc_tools() -> None:
             )
         )
 
-    def _schedule_power(action: str, minutes_from_now: int) -> str:
+    async def _schedule_power(action: str, minutes_from_now: int) -> str:
         from app.services.reminders import reminder_service
 
         action = (action or "").strip().lower()
@@ -1188,8 +1196,11 @@ def _register_pc_tools() -> None:
         # Reminder text and the cancel hint both use the bare action name, so
         # the suggested phrase ("cancel the scheduled lock") matches the row
         # through the same substring lookup as any other reminder.
-        reminder = reminder_service.add(
-            f"Scheduled {action}", minutes, power_action=action
+        reminder = await asyncio.to_thread(
+            reminder_service.add,
+            f"Scheduled {action}",
+            minutes,
+            power_action=action,
         )
         when = reminder["fire_time_dt"].strftime("%I:%M %p").lstrip("0")
         return (

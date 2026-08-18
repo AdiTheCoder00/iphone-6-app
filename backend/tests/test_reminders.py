@@ -27,6 +27,15 @@ async def _direct_call(fn, *args, **kwargs):
     return fn(*args, **kwargs)
 
 
+@pytest.fixture(autouse=True)
+def clean_power_retries():
+    """_power_retries is module-level: a test must not inherit another test's
+    backoff counts."""
+    reminders_mod._power_retries.clear()
+    yield
+    reminders_mod._power_retries.clear()
+
+
 @pytest.fixture
 def poller(monkeypatch):
     """Run the poll loop with a fast tick and no real thread hops.
@@ -100,6 +109,99 @@ def test_stale_retired_silently(fresh_store, no_subscribers):
     events, power = reminder_service.check_reminders()
     assert events == [] and power == []
     assert reminder_service.pending() == []
+
+
+def test_stale_recurring_skipped_but_schedule_kept(fresh_store, no_subscribers):
+    """A recurring reminder that missed its slot by >MAX_LATE_SECONDS must not
+    lose the recurrence: the late occurrence is skipped, the next one stays."""
+    past = time.time() - 7 * 3600
+    row = reminder_service.add_at("water plants", past, repeat="daily")
+    events, power = reminder_service.check_reminders()
+    assert events == [] and power == []
+    after = store.pending_reminders()
+    assert len(after) == 1
+    assert after[0]["repeat"] == "daily"
+    step = after[0]["fire_time"] - row["fire_time"]
+    assert 82800 < step < 90000  # ~24h, tolerant of a DST shift
+
+
+async def test_power_row_not_rearmed_after_poll_cancel(
+    fresh_store, no_subscribers, monkeypatch
+):
+    """A shutdown that already executed must not be re-armed when the poll loop
+    is cancelled: the next boot would otherwise run it a second time."""
+    monkeypatch.setattr(reminders_mod, "POLL_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(reminders_mod.asyncio, "to_thread", _direct_call)
+    ran: list[int] = []
+
+    async def fake_run(row):
+        ran.append(row["id"])
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(reminder_service, "_run_power_action", fake_run)
+    row = reminder_service.add("shutdown at midnight", 0, power_action="shutdown")
+
+    task = asyncio.create_task(reminder_service._poll_loop())
+    for _ in range(200):
+        if ran:
+            break
+        await asyncio.sleep(0.01)
+    assert ran == [row["id"]]  # the action ran before the cancel landed
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert reminder_service.pending() == []  # claimed and executed, not re-armed
+    assert store.due_reminders() == []
+
+
+async def test_power_failure_rearms_with_growing_backoff(
+    fresh_store, no_subscribers, monkeypatch
+):
+    """A failing power action retries at a growing delay (1m, 2m, ...) instead
+    of every poll tick, and success clears the retry state."""
+
+    def boom():
+        raise RuntimeError("boom")
+
+    from app.services import pc_control
+
+    monkeypatch.setattr(pc_control, "shutdown_pc", boom)
+    row = reminder_service.add("shutdown", 0, power_action="shutdown")
+
+    events, power = reminder_service.check_reminders()
+    assert power and not events
+    await reminder_service._run_power_action(power[0])
+    pending = store.pending_reminders()
+    assert len(pending) == 1
+    assert pending[0]["fire_time"] == pytest.approx(time.time() + 60, abs=5)
+
+    # Second failure: the backoff doubles.
+    conn = store._require()
+    with store._lock:
+        conn.execute(
+            "UPDATE reminders SET fired = 0, fire_time = ? WHERE id = ?",
+            (time.time() - 1, row["id"]),
+        )
+        conn.commit()
+    events, power = reminder_service.check_reminders()
+    assert power
+    await reminder_service._run_power_action(power[0])
+    pending = store.pending_reminders()
+    assert len(pending) == 1
+    assert pending[0]["fire_time"] == pytest.approx(time.time() + 120, abs=5)
+
+    # Success clears the per-reminder retry state.
+    monkeypatch.setattr(pc_control, "shutdown_pc", lambda delay: None)
+    conn = store._require()
+    with store._lock:
+        conn.execute(
+            "UPDATE reminders SET fired = 0, fire_time = ? WHERE id = ?",
+            (time.time() - 1, row["id"]),
+        )
+        conn.commit()
+    events, power = reminder_service.check_reminders()
+    await reminder_service._run_power_action(power[0])
+    assert reminders_mod._power_retries.get(row["id"]) is None
 
 
 async def test_snooze_moves_fired_reminder(fresh_store, no_subscribers, poller):

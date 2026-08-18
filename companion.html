@@ -572,15 +572,15 @@ html, body {
   transition: opacity 300ms ease;
 }
 
-.dock__chat, .dock__mic {
+.dock__mic {
   width: 52px;
   height: 52px;
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Lifted from 0.25/0.9: against the near-black background the controls sat
-     close to invisible, which is wrong for the only two things on screen you
-     are meant to touch. */
+  /* Lifted from 0.25/0.9: against the near-black background the control sat
+     close to invisible, which is wrong for the only thing on screen you are
+     meant to touch. */
   border: 1px solid rgba(var(--accent-rgb), 0.38);
   border-radius: 50%;
   background: rgba(24, 33, 39, 0.95);
@@ -588,10 +588,8 @@ html, body {
   cursor: pointer;
   transition: transform 200ms ease, border-color 200ms ease;
 }
-.dock__chat { margin-right: 18px; }
-.dock__chat:active, .dock__mic:active { transform: scale(0.93); }
-.dock__chat[aria-expanded="true"] { border-color: rgba(var(--accent-rgb), 0.6); }
-.dock__chat svg, .dock__mic svg { width: 23px; height: 23px; display: block; }
+.dock__mic:active { transform: scale(0.93); }
+.dock__mic svg { width: 23px; height: 23px; display: block; }
 
 /* Hidden entirely when the browser has no MediaRecorder, or the user denied
    the mic — the text composer remains the full fallback. */
@@ -1175,8 +1173,7 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 /* The bubble clears the sheet AND the status band (which owns the top 54px
    above the sheet): with the old deck-h+14 the bubble's bottom sat behind
    the band whenever the DND chip row was up. */
-.bubble,
-.stage[data-composer="open"] .bubble { bottom: calc(var(--deck-h) + 62px); max-height: 150px; }
+.bubble { bottom: calc(var(--deck-h) + 62px); max-height: 150px; }
 
 /* Backend down: the error strip wins over a stale bubble — yesterday's reply
    next to "can't reach the backend" reads as if the reply were live. The
@@ -1631,7 +1628,6 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
     <!-- 3c -->
     <div class="pair__step" id="pairFind" data-active="true">
       <h2 class="pair__title">Found a companion nearby</h2>
-      <p class="pair__sub" id="pairFindSub">A backend answered on this network. Confirm it’s yours.</p>
       <div class="pair__found">
         <div class="pair__found__icon" aria-hidden="true">💻</div>
         <div class="pair__found__main">
@@ -2348,6 +2344,16 @@ window.CompanionSpeech = (function () {
      cancelled) — and must release its own object URL instead of leaking it. */
   var speakGeneration = 0;
 
+  /* Where the sound actually comes from. Learned from /health at boot and
+     from the X-Speaker header on every /speak reply (the header wins: it is
+     the truth for that exact clip). */
+  var speakerMode = 'phone';
+  var localSpeaker = false;   // this reply is playing on the PC — phone muted
+
+  function setSpeakerMode(mode) {
+    if (mode === 'pc' || mode === 'phone') speakerMode = mode;
+  }
+
   /* iOS will not start audio that was not initiated by a user gesture, and an
      AudioContext starts suspended until one occurs. Both are unlocked on the
      first touch anywhere; after that, replies can play on their own. */
@@ -2382,7 +2388,7 @@ window.CompanionSpeech = (function () {
   document.addEventListener('pointerdown', unlock, { once: true });
 
   function animateMouth() {
-    if (analyser) {
+    if (analyser && !localSpeaker) {
       analyser.getByteFrequencyData(freqData);
       /* Average the low/mid bins only — that is where speech energy sits, and
          including the top of the spectrum makes the mouth twitch on sibilance. */
@@ -2391,8 +2397,10 @@ window.CompanionSpeech = (function () {
       var level = (sum / bins) / 160;
       window.Companion.setTalkLevel(level);
     } else {
-      /* No analyser: a gentle synthetic flutter is still better than a mouth
-         frozen open for the whole reply. */
+      /* No analyser — or the reply is playing on the PC, where the phone's
+         muted element may feed the analyser silence. The synthetic flutter
+         is the same fallback as the no-Web-Audio path: the mouth moves on
+         schedule instead of freezing shut for the whole reply. */
       window.Companion.setTalkLevel(0.35 + 0.35 * Math.abs(Math.sin(Date.now() / 90)));
     }
     rafId = requestAnimationFrame(animateMouth);
@@ -2424,6 +2432,14 @@ window.CompanionSpeech = (function () {
      across the room, before the spoken line (or instead of it when speech is
      off). Uses the same unlocked AudioContext so it plays without a gesture. */
   function chime() {
+    if (speakerMode === 'pc') {
+      /* The PC is the speaker of record: the ding must come from there too,
+         or a timer would chime quietly on the phone and the spoken line boom
+         from across the desk. Best effort — silence is an acceptable outcome
+         and the bubble still shows. */
+      window.CompanionConfig.request('/chime', { method: 'POST' }).catch(function () {});
+      return;
+    }
     if (!ctx) return;
     var tones = [880, 660];
     tones.forEach(function (freq, i) {
@@ -2473,6 +2489,15 @@ window.CompanionSpeech = (function () {
          releasing this blob instead of orphaning a second object URL. */
       if (mySpeak !== speakGeneration) return;
 
+      /* When the PC is the speaker of record (SPEAKER=pc), the backend has
+         already played this clip and the header says so. The phone still
+         plays it — muted — because playback is what drives the mouth's
+         timing and the 'ended' cleanup. The header is a hint, not a truth:
+         if the PC could not play, the header says 'phone' and the phone
+         speaks as usual. */
+      localSpeaker = res.headers.get('X-Speaker') === 'pc';
+      audio.volume = localSpeaker ? 0 : 1;
+
       if (currentUrl) URL.revokeObjectURL(currentUrl);
       currentUrl = URL.createObjectURL(blob);
       audio.src = currentUrl;
@@ -2488,7 +2513,7 @@ window.CompanionSpeech = (function () {
     }
   }
 
-  return { speak: speak, cancel: cancel, unlock: unlock, chime: chime };
+  return { speak: speak, cancel: cancel, unlock: unlock, chime: chime, setSpeakerMode: setSpeakerMode };
 })();
 
 
@@ -3734,7 +3759,16 @@ async function checkHealth() {
       var res = await window.CompanionConfig.request(
         '/health', { cache: 'no-store' }, HEALTH_REQUEST_TIMEOUT_MS
       );
-      if (res.ok) health = await res.json();
+      if (res.ok) {
+        health = await res.json();
+        /* Which device makes the sound: the PC when SPEAKER=pc. The phone
+           mutes its own playback and routes the timer ding to /chime. */
+        if (health && window.CompanionSpeech) {
+          window.CompanionSpeech.setSpeakerMode(
+            health.speaker === 'pc' ? 'pc' : 'phone'
+          );
+        }
+      }
     } catch (e) {
       health = null;
     } finally {
@@ -4479,9 +4513,26 @@ window.CompanionVoice = (function () {
   function fetchWithTimeout(url, options, ms) {
     var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var opts = options || {};
-    if (controller) opts.signal = controller.signal;
-    var timer = setTimeout(function () { if (controller) controller.abort(); }, ms);
-    return fetch(url, opts).then(function (res) {
+    var timer;
+    if (controller) {
+      opts.signal = controller.signal;
+      timer = setTimeout(function () { controller.abort(); }, ms);
+      return fetch(url, opts).then(function (res) {
+        clearTimeout(timer);
+        return res;
+      }, function (err) {
+        clearTimeout(timer);
+        throw err;
+      });
+    }
+    /* iOS 12.0/12.1 have no AbortController, so the fetch cannot be aborted —
+       but a half-open connection must still error out or the pairing flow
+       wedges on "connecting…" forever, so race it against a timeout
+       rejection (same pattern as CompanionConfig.request). */
+    var timeoutPromise = new Promise(function (resolve, reject) {
+      timer = setTimeout(function () { reject(new Error('Request timed out')); }, ms);
+    });
+    return Promise.race([fetch(url, opts), timeoutPromise]).then(function (res) {
       clearTimeout(timer);
       return res;
     }, function (err) {
@@ -4651,6 +4702,17 @@ window.CompanionVoice = (function () {
       mediaPromise,
       loadDecoder()
     ]).then(function (results) {
+      /* The overlay may have been dismissed (Escape, "continue") or the step
+         changed away from connect while the camera was still starting —
+         getUserMedia can take seconds on iOS. Re-attaching the stream now
+         would leave the privacy indicator lit and a dead scan loop running
+         under the app, and the next startCamera would then bail on
+         `if (stream)` with the camera stuck. Stop the tracks and leave
+         stream null so a later start is clean. */
+      if (root.hidden || steps.connect.getAttribute('data-active') !== 'true') {
+        results[0].getTracks().forEach(function (t) { t.stop(); });
+        return;
+      }
       stream = results[0];
       video.srcObject = stream;
       var play = video.play();

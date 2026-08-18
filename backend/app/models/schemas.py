@@ -181,4 +181,7 @@ class HealthResponse(BaseModel):
     # on the first health probe or request.
     model_status: Literal["ready", "unavailable"]
     tts_enabled: bool = False
+    # "phone" or "pc" — which device actually makes the sound. The phone
+    # mutes itself when the PC is the speaker of record.
+    speaker: str = "phone"
     ha_connected: bool = False

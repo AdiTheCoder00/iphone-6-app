@@ -111,12 +111,21 @@ async function request<T>(
     ]);
     if (response.status === 401) throw new UnauthorizedError();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    if (response.status === 204) return undefined as T;
     /* The body read is not covered by the caller's abort (which only cancels
      * the response phase), so race it against the same timeout. */
     return (await Promise.race([response.json(), timeout])) as T;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/* Runtime guard for the list endpoints: the panels render the returned
+ * arrays directly, so a malformed payload (wrong shape instead of a clean
+ * 500) would otherwise crash a whole panel at render time. The cast above
+ * promises the type; this enforces it. */
+function expectArray(value: unknown, what: string): asserts value is unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Malformed ${what} response from backend`);
   }
 }
 
@@ -126,15 +135,24 @@ export const api = {
   pcStatus: (s: Settings, signal?: AbortSignal) =>
     request<PCStatus>(s, '/status/pc', {}, signal),
   reminders: (s: Settings, signal?: AbortSignal) =>
-    request<{ reminders: Reminder[] }>(s, '/reminders', {}, signal).then((r) => r.reminders),
+    request<{ reminders: Reminder[] }>(s, '/reminders', {}, signal).then((r) => {
+      expectArray(r.reminders, 'reminders');
+      return r.reminders;
+    }),
   cancelReminder: (s: Settings, id: number) =>
     request<unknown>(s, `/reminders/${id}`, { method: 'DELETE' }),
   facts: (s: Settings, signal?: AbortSignal) =>
-    request<{ facts: Fact[] }>(s, '/facts', {}, signal).then((r) => r.facts),
+    request<{ facts: Fact[] }>(s, '/facts', {}, signal).then((r) => {
+      expectArray(r.facts, 'facts');
+      return r.facts;
+    }),
   deleteFact: (s: Settings, id: number) =>
     request<unknown>(s, `/facts/${id}`, { method: 'DELETE' }),
   conversation: (s: Settings, signal?: AbortSignal) =>
-    request<{ messages: ChatMessage[] }>(s, '/conversation', {}, signal).then((r) => r.messages),
+    request<{ messages: ChatMessage[] }>(s, '/conversation', {}, signal).then((r) => {
+      expectArray(r.messages, 'conversation');
+      return r.messages;
+    }),
   clearConversation: (s: Settings) =>
     request<unknown>(s, '/conversation', { method: 'DELETE' }),
   /* Transport only — the backend's Literal schema rejects anything else. */
@@ -144,7 +162,10 @@ export const api = {
       body: JSON.stringify({ action }),
     }),
   smartDevices: (s: Settings, signal?: AbortSignal) =>
-    request<SmartDevices>(s, '/smart/devices', {}, signal),
+    request<SmartDevices>(s, '/smart/devices', {}, signal).then((r) => {
+      expectArray(r.devices, 'smart home devices');
+      return r;
+    }),
   setSmartDevice: (s: Settings, entityId: string, turnOn: boolean) =>
     request<unknown>(s, `/smart/devices/${encodeURIComponent(entityId)}/state`, {
       method: 'POST',

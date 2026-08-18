@@ -62,7 +62,12 @@ export function ConversationPanel({ messages, error, loading, settings, onChange
       {failed ? <p className="error">{failed}</p> : null}
       <div className="chat">
         {messages?.map((m, i) => (
-          <div key={i} className={`bubble bubble--${m.role}`}>
+          /* Index alone is not a stable identity here: the backend trims the
+             oldest turns when the transcript grows, so a re-fetch can push an
+             earlier index onto a different message. Composite key — role and
+             content plus position — keeps React from reusing a bubble for
+             someone else's text when history slides. */
+          <div key={`${m.role}:${m.content}:${i}`} className={`bubble bubble--${m.role}`}>
             {m.content}
           </div>
         ))}

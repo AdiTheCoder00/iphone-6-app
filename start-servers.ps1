@@ -164,14 +164,11 @@ if (-not $frontRunning -and $previousPort -and $previousPort -ne $frontPort -and
 
 # An instance started before --ca-port existed serves the PWA but not the
 # certificate download; the phone would stall on "install the profile from a
-# page served over the LAN". Restart it if the CA port is missing.
-$caPortMarker = Join-Path $root '.frontend-ca-port'
-$previousCaPort = $null
-if (Test-Path $caPortMarker) {
-  $previousCaPort = (Get-Content $caPortMarker).Trim()
-  if ($previousCaPort -notmatch '^\d+$') { $previousCaPort = $null }
-}
-if ($frontRunning -and $hasCert -and -not (Test-PortListening 8081)) {
+# page served over the LAN". Restart it if the CA port is missing — but only
+# an instance this script started (the port marker records that it did).
+# A manually launched serve_frontend.py (no marker) is left alone, matching
+# the policy above: this script never kills what it did not start.
+if ($frontRunning -and $hasCert -and -not (Test-PortListening 8081) -and $previousPort -eq "$frontPort") {
   $conn = Get-NetTCPConnection -LocalPort $frontPort -State Listen | Select-Object -First 1
   $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
   if ($proc -and (Is-CompanionProcess $proc.Id)) {

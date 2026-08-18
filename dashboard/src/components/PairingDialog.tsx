@@ -116,7 +116,10 @@ export function PairingDialog({ settings, onClose }: Props) {
 
   useEffect(() => {
     /* Focus management: the Done button gets focus on open, Tab stays inside
-     * the dialog, and focus returns to the opener on unmount. */
+     * the dialog, and focus returns to the opener on unmount. Done is the
+     * LAST focusable element, so the very first Shift+Tab (from the focused
+     * Done button) must wrap to the first — without that branch the trap
+     * hands focus to the background on the first keyboard interaction. */
     openerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
@@ -136,7 +139,7 @@ export function PairingDialog({ settings, onClose }: Props) {
       const first = list[0];
       const last = list[list.length - 1];
       const active = document.activeElement;
-      if (e.shiftKey && (active === first || active === modal)) {
+      if (e.shiftKey && (active === first || active === last || active === modal)) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && active === last) {

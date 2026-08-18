@@ -76,12 +76,19 @@ def _endpoint_volume():
 
     COM must be initialised per thread, and these calls run in FastAPI's
     threadpool, so it is initialised on every call rather than once at import.
+    Each CoInitialize bumps the thread's COM refcount, so every call must be
+    balanced by a CoUninitialize — leaving one dangling per call accumulates
+    forever on long-lived threadpool threads. The comtypes interface object
+    holds its own reference, so it stays valid after the apartment closes.
     """
     import comtypes
     from pycaw.utils import AudioUtilities
 
     comtypes.CoInitialize()
-    return AudioUtilities.GetSpeakers().EndpointVolume
+    try:
+        return AudioUtilities.GetSpeakers().EndpointVolume
+    finally:
+        comtypes.CoUninitialize()
 
 
 def get_volume() -> tuple[int, bool]:

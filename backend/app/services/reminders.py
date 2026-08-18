@@ -25,8 +25,31 @@ POLL_INTERVAL_SECONDS = 30
 # pending until someone is listening — better late than never.
 #
 # But only up to a point: a reminder that surfaces days after the fact is
-# noise, not a reminder. Past this, it is retired silently.
+# noise, not a reminder. Past this, it is retired silently — though a
+# recurring reminder keeps its schedule: the late occurrence is skipped, the
+# next occurrence is re-armed.
 MAX_LATE_SECONDS = 6 * 3600
+
+# A scheduled sleep/shutdown/lock that keeps failing must not hammer the
+# machine every poll tick forever. Each failure re-arms the row at a growing
+# delay (1m, 2m, 4m, ... capped at 30m), so a persistently failing action
+# retries at most every 30 minutes rather than every 30 seconds.
+POWER_RETRY_INITIAL_SECONDS = 60
+POWER_RETRY_MAX_SECONDS = 30 * 60
+# Retry counts live in a per-reminder in-memory dict: restarting resets the
+# backoff to 1m, which is fine for a desk device. The dict is capped so long
+# chains of failed rows cannot grow it without bound.
+_MAX_TRACKED_POWER_RETRIES = 64
+_power_retries: dict[int, int] = {}
+
+
+def _next_power_retry_delay(reminder_id: int) -> float:
+    """Backoff for the next attempt of a failing power row."""
+    attempts = _power_retries.get(reminder_id, 0)
+    _power_retries[reminder_id] = attempts + 1
+    if len(_power_retries) > _MAX_TRACKED_POWER_RETRIES:
+        _power_retries.pop(next(iter(_power_retries)), None)
+    return min(POWER_RETRY_INITIAL_SECONDS * (2**attempts), POWER_RETRY_MAX_SECONDS)
 
 
 def reminder_event(reminder: dict) -> dict:
@@ -156,15 +179,31 @@ class ReminderService:
         for reminder in due:
             if now - reminder["fire_time"] > MAX_LATE_SECONDS:
                 if store.mark_fired(reminder["id"]):
-                    # Terminal, like delivery: this row must never be picked up
-                    # by the startup reconciliation and re-fired.
-                    store.mark_delivered(reminder["id"])
-                    logger.info(
-                        "Reminder %d retired unsent (%.1fh late): %s",
-                        reminder["id"],
-                        (now - reminder["fire_time"]) / 3600.0,
-                        reminder["text"],
-                    )
+                    if reminder.get("repeat"):
+                        # Skip this late occurrence, but keep the schedule:
+                        # retiring the row would silently kill a daily/weekly
+                        # reminder that merely happened to fall inside a long
+                        # outage.
+                        store.rearm_recurring(
+                            reminder["id"], reminder["repeat"], reminder["fire_time"]
+                        )
+                        logger.info(
+                            "Reminder %d skipped unsent (%.1fh late), recurrence kept (%s): %s",
+                            reminder["id"],
+                            (now - reminder["fire_time"]) / 3600.0,
+                            reminder["repeat"],
+                            reminder["text"],
+                        )
+                    else:
+                        # Terminal, like delivery: this row must never be picked up
+                        # by the startup reconciliation and re-fired.
+                        store.mark_delivered(reminder["id"])
+                        logger.info(
+                            "Reminder %d retired unsent (%.1fh late): %s",
+                            reminder["id"],
+                            (now - reminder["fire_time"]) / 3600.0,
+                            reminder["text"],
+                        )
             elif reminder.get("power_action"):
                 power.append(reminder)
             else:
@@ -232,17 +271,21 @@ class ReminderService:
 
         try:
             await asyncio.to_thread(_act)
+            _power_retries.pop(row["id"], None)
             logger.info("Scheduled power action %r executed: %s", action, row["text"])
         except Exception as e:
             logger.error("Scheduled power action %r failed: %s", action, e)
             # Re-arm the claim so the next poll retries — a failed scheduled
             # shutdown must not be silently lost. Guarded on fired = 1, so
-            # only the claimer can re-arm; the stale-retirement guard bounds
-            # how long a persistently failing action keeps retrying.
-            if store.unmark_fired(row["id"]):
+            # only the claimer can re-arm; the growing delay bounds how often
+            # a persistently failing action keeps retrying (1m..30m) instead
+            # of hammering the machine every poll tick.
+            delay = _next_power_retry_delay(row["id"])
+            if store.unmark_fired(row["id"], retry_at=time.time() + delay):
                 logger.warning(
-                    "Power action %r re-armed for retry (reminder %d)",
+                    "Power action %r re-armed for retry in %.0fs (reminder %d)",
                     action,
+                    delay,
                     row["id"],
                 )
 
@@ -252,6 +295,10 @@ class ReminderService:
         # actions are being run every event has been delivered; the flag
         # tells the cancellation handler exactly that.
         published: set[int] = set()
+        # Power rows whose action has been handed to a thread: asyncio.to_thread
+        # runs to completion even when the awaiting coroutine is cancelled, so
+        # an id in here has actually executed and must never be re-armed.
+        executed: set[int] = set()
         claim_task: asyncio.Task | None = None
         while True:
             try:
@@ -279,7 +326,7 @@ class ReminderService:
                                 fired["id"],
                             )
                     events = []
-                published: set[int] = set()
+                published = set()
                 for fired in events:
                     event_hub.publish(reminder_event(fired))
                     # Set as soon as the events have been handed to
@@ -291,7 +338,12 @@ class ReminderService:
                 for fired in events:
                     await asyncio.to_thread(store.mark_delivered, fired["id"])
                     logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
+                executed = set()
                 for row in power_actions:
+                    # Recorded before the await: to_thread completes the
+                    # action even if this loop is cancelled mid-await, so the
+                    # cancellation handler must treat the row as done.
+                    executed.add(row["id"])
                     await self._run_power_action(row)
             except asyncio.CancelledError:
                 try:
@@ -303,11 +355,12 @@ class ReminderService:
                 except Exception:
                     events, power_actions = [], []
                 for reminder in events + power_actions:
-                    # Events already handed to subscribers ARE the delivery —
-                    # re-arming them would just fire them again next boot.
-                    # Power actions get re-armed unconditionally: the action
-                    # itself may never have run.
-                    if reminder["id"] in published:
+                    # Events already handed to subscribers ARE the delivery,
+                    # and power actions already handed to a thread HAVE run —
+                    # re-arming either would just fire them again next boot.
+                    # Anything else was claimed but never handled: re-arm so
+                    # the next listener or the poll loop delivers it.
+                    if reminder["id"] in published or reminder["id"] in executed:
                         continue
                     if await asyncio.to_thread(store.unmark_fired, reminder["id"]):
                         logger.warning(

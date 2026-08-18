@@ -24,6 +24,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(!settings.token);
   const [pairing, setPairing] = useState(false);
+  const [feedOpen, setFeedOpen] = useState(false);
 
   const updateSettings = useCallback((next: Settings) => {
     saveSettings(next);
@@ -60,7 +61,10 @@ export default function App() {
   /* A fired reminder or an unprompted message means the lists are already
    * stale — refresh them off the event stream instead of waiting out the
    * 20s timer. Refreshers are held in a ref so this fires on a new event
-   * only, not every time a poll hook hands back a new callback identity. */
+   * only, not every time a poll hook hands back a new callback identity.
+   * Kept current in an effect (not during render): writing to a ref in the
+   * render body is outside the rules of concurrent React, where a render
+   * can be replayed or discarded. */
   const latestEventId = events[0]?.id ?? -1;
   const refreshers = useRef({
     reminders: reminders.refresh,
@@ -68,12 +72,14 @@ export default function App() {
     facts: facts.refresh,
     smart: smart.refresh,
   });
-  refreshers.current = {
-    reminders: reminders.refresh,
-    conversation: conversation.refresh,
-    facts: facts.refresh,
-    smart: smart.refresh,
-  };
+  useEffect(() => {
+    refreshers.current = {
+      reminders: reminders.refresh,
+      conversation: conversation.refresh,
+      facts: facts.refresh,
+      smart: smart.refresh,
+    };
+  });
 
   /* Refresh() aborts the poll currently in flight; firing all four per event
    * during a burst (or with a slow backend) would keep aborting polls that
@@ -94,107 +100,131 @@ export default function App() {
     }
   }, [latestEventId]);
 
+  /* While the pairing modal is open, the shell behind it must be invisible to
+   * assistive tech and unreachable by keyboard: aria-modal alone is not
+   * reliably honoured, and a screen-reader user could otherwise land on the
+   * controls behind the dialog. The dialog is rendered OUTSIDE .app (below),
+   * so inerting .app does not touch it. */
+  useEffect(() => {
+    const shell = document.querySelector('.app');
+    if (!shell) return;
+    if (pairing) {
+      shell.setAttribute('aria-hidden', 'true');
+      (shell as HTMLElement).setAttribute('inert', '');
+    } else {
+      shell.removeAttribute('aria-hidden');
+      shell.removeAttribute('inert');
+    }
+  }, [pairing]);
+
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand__eyes" aria-hidden>
-            <i />
-            <i />
-          </span>
-          <h1>Companion</h1>
-        </div>
-        <div className="topbar__actions">
-          <button type="button" className="btn" onClick={() => setPairing(true)}>
-            Pair a phone
-          </button>
-          <SettingsBar
-            settings={settings}
-            onSave={updateSettings}
-            open={settingsOpen}
-            onOpenChange={setSettingsOpen}
-          />
-        </div>
-      </header>
+    <>
+      <div className="app">
+        <header className="topbar">
+          <div className="brand">
+            <span className="brand__eyes" aria-hidden>
+              <i />
+              <i />
+            </span>
+            <h1>Companion</h1>
+          </div>
+          <div className="topbar__actions">
+            <button type="button" className="btn" onClick={() => setPairing(true)}>
+              Pair a phone
+            </button>
+            <SettingsBar
+              settings={settings}
+              onSave={updateSettings}
+              open={settingsOpen}
+              onOpenChange={setSettingsOpen}
+            />
+          </div>
+        </header>
 
-      <StatusBar
-        health={health.data}
-        error={health.error}
-        streamConnected={connected}
-        streamFailed={failed}
-        streamAttempts={attempts}
-        backendUrl={settings.backendUrl}
-        reconnecting={reconnecting}
-        lastSeen={lastSeen.current}
-        onSettings={() => setSettingsOpen(true)}
-      />
-
-      {/* Mockup 3f: while reconnecting the panels keep their last-known data,
-          dimmed as a whole rather than panel by panel — they all read the one
-          backend, so they went stale together and at the same moment. */}
-      <main className={`bento${reconnecting ? ' is-stale' : ''}`}>
-        <NowPlayingHero
-          status={pc.data}
-          error={panelError(pc.error)}
-          loading={pc.loading}
-          settings={settings}
-          onChanged={pc.refresh}
-          onPair={() => setPairing(true)}
-          stale={reconnecting}
+        <StatusBar
+          health={health.data}
+          error={health.error}
+          streamConnected={connected}
+          streamFailed={failed}
+          streamAttempts={attempts}
+          backendUrl={settings.backendUrl}
+          reconnecting={reconnecting}
+          lastSeen={lastSeen.current}
+          onSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="bento__chat">
-          <ConversationPanel
-            messages={conversation.data}
-            error={panelError(conversation.error)}
-            loading={conversation.loading}
+        {/* Mockup 3f: while reconnecting the panels keep their last-known data,
+            dimmed as a whole rather than panel by panel — they all read the one
+            backend, so they went stale together and at the same moment. */}
+        <main className={`bento${reconnecting ? ' is-stale' : ''}`}>
+          <NowPlayingHero
+            status={pc.data}
+            error={panelError(pc.error)}
+            loading={pc.loading}
             settings={settings}
-            onChanged={conversation.refresh}
+            onChanged={pc.refresh}
+            onPair={() => setPairing(true)}
+            stale={reconnecting}
           />
-        </div>
 
-        {/* Reminders and memory share the tile, as drawn: the facts sit under
-            the reminder rows as chips. */}
-        <div className="bento__left">
-          <RemindersPanel
-            reminders={reminders.data}
-            error={panelError(reminders.error)}
-            loading={reminders.loading}
-            settings={settings}
-            onChanged={reminders.refresh}
-          />
-          <MemoryPanel
-            facts={facts.data}
-            error={panelError(facts.error)}
-            loading={facts.loading}
-            settings={settings}
-            onChanged={facts.refresh}
-          />
-        </div>
+          <div className="bento__chat">
+            <ConversationPanel
+              messages={conversation.data}
+              error={panelError(conversation.error)}
+              loading={conversation.loading}
+              settings={settings}
+              onChanged={conversation.refresh}
+            />
+          </div>
 
-        <div className="bento__right">
-          <SmartHomePanel
-            data={smart.data}
-            error={panelError(smart.error)}
-            loading={smart.loading}
-            settings={settings}
-            onChanged={smart.refresh}
-          />
-        </div>
-      </main>
+          {/* Reminders and memory share the tile, as drawn: the facts sit under
+              the reminder rows as chips. */}
+          <div className="bento__left">
+            <RemindersPanel
+              reminders={reminders.data}
+              error={panelError(reminders.error)}
+              loading={reminders.loading}
+              settings={settings}
+              onChanged={reminders.refresh}
+            />
+            <MemoryPanel
+              facts={facts.data}
+              error={panelError(facts.error)}
+              loading={facts.loading}
+              settings={settings}
+              onChanged={facts.refresh}
+            />
+          </div>
 
-      <ActivityTicker events={events} connected={connected} failed={failed} />
+          <div className="bento__right">
+            <SmartHomePanel
+              data={smart.data}
+              error={panelError(smart.error)}
+              loading={smart.loading}
+              settings={settings}
+              onChanged={smart.refresh}
+            />
+          </div>
+        </main>
 
-      {/* The ticker shows three; the feed is the whole history and stays
-          mounted under it rather than being dropped from the page. */}
-      <details className="feed-drawer">
-        <summary>Full activity log</summary>
-        <EventFeed events={events} connected={connected} failed={failed} />
-      </details>
+        <ActivityTicker events={events} connected={connected} failed={failed} announce={!feedOpen} />
+
+        {/* The ticker shows three; the feed is the whole history and stays
+            mounted under it rather than being dropped from the page. When the
+            drawer is open, the feed is the live announcement — the ticker
+            must not read the same event out a second time. */}
+        <details
+          className="feed-drawer"
+          onToggle={(e) => setFeedOpen(e.currentTarget.open)}
+        >
+          <summary>Full activity log</summary>
+          <EventFeed events={events} connected={connected} failed={failed} />
+        </details>
+      </div>
 
       {pairing ? (
         <PairingDialog settings={settings} onClose={() => setPairing(false)} />
       ) : null}
-    </div>
+    </>
   );
 }

@@ -270,11 +270,12 @@ class CompanionHandler(SimpleHTTPRequestHandler):
         # URL therefore carries it — outbound links must not receive one.
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        if getattr(self.server, "https", False):
-            # HSTS only over TLS: a browser that reached the server on plain
-            # HTTP must not be forced onto https, that would break the
-            # no-cert HTTP setup entirely.
-            self.send_header("Strict-Transport-Security", "max-age=31536000")
+        # Deliberately no Strict-Transport-Security: HSTS is host-wide across
+        # ALL ports, and this host is a bare LAN IP shared with the plain-HTTP
+        # CA download listener (:8081) and the no-cert HTTP setup. One HTTPS
+        # visit would silently upgrade both to HTTPS and break the pairing
+        # path the very next time it is needed. The trusted-CA + token
+        # combination is the actual protection here, not HSTS.
         if getattr(self, "_dashboard_csp", False):
             self.send_header("Content-Security-Policy", DASHBOARD_CSP)
         path = urllib.parse.urlparse(self.path).path
@@ -356,9 +357,6 @@ def serve(port: int, cert_dir: Path | None, ca_port: int | None = None) -> None:
             )
 
     server = _ThrottledServer(("0.0.0.0", port), CompanionHandler)
-    # Read by end_headers to decide HSTS: the flag lives on the server because
-    # the scheme is a serve()-level property, not a per-request one.
-    server.https = cert_dir is not None
 
     if cert_dir is not None:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

@@ -62,6 +62,79 @@ def test_health_is_open(client):
     assert client.get("/health").status_code == 200
 
 
+def test_health_reports_speaker(client):
+    body = client.get("/health").json()
+    assert body["speaker"] in ("phone", "pc")
+
+
+def test_speak_phone_speaker_sends_no_header(client, authed_headers, monkeypatch):
+    """Default SPEAKER=phone: the phone is the speaker of record and no
+    X-Speaker hint is needed."""
+    from app import main
+
+    async def fake_synthesize(_text):
+        return b"RIFF\x00\x00\x00WAVE"
+
+    monkeypatch.setattr(main.tts, "synthesize", fake_synthesize)
+    r = client.post("/speak", json={"text": "hello"}, headers=authed_headers)
+    assert r.status_code == 200
+    assert "x-speaker" not in r.headers
+
+
+def test_speak_pc_speaker_plays_locally(client, authed_headers, monkeypatch):
+    """SPEAKER=pc with a working local speaker: the backend plays the clip
+    and the phone is told to mute itself."""
+    from app import main
+    from app.services import speaker as speaker_module
+
+    monkeypatch.setattr(settings, "speaker", "pc")
+
+    async def fake_synthesize(_text):
+        return b"RIFF\x00\x00\x00WAVE"
+
+    monkeypatch.setattr(main.tts, "synthesize", fake_synthesize)
+    monkeypatch.setattr(speaker_module, "play", lambda _audio: True)
+    r = client.post("/speak", json={"text": "hello"}, headers=authed_headers)
+    assert r.status_code == 200
+    assert r.headers["x-speaker"] == "pc"
+
+
+def test_speak_pc_falls_back_to_phone(client, authed_headers, monkeypatch):
+    """SPEAKER=pc but the local speaker cannot play: the header tells the
+    phone to speak as usual so the reply is never lost to a dead speaker."""
+    from app import main
+    from app.services import speaker as speaker_module
+
+    monkeypatch.setattr(settings, "speaker", "pc")
+
+    async def fake_synthesize(_text):
+        return b"RIFF\x00\x00\x00WAVE"
+
+    monkeypatch.setattr(main.tts, "synthesize", fake_synthesize)
+    monkeypatch.setattr(speaker_module, "play", lambda _audio: False)
+    r = client.post("/speak", json={"text": "hello"}, headers=authed_headers)
+    assert r.status_code == 200
+    assert r.headers["x-speaker"] == "phone"
+
+
+def test_chime_requires_pc_speaker(client, authed_headers, monkeypatch):
+    """The timer ding only ever plays on the PC when the PC is the speaker
+    of record; otherwise the phone's own chime handles it."""
+    monkeypatch.setattr(settings, "speaker", "phone")
+    r = client.post("/chime", headers=authed_headers)
+    assert r.status_code == 503
+
+
+def test_chime_plays_on_pc(client, authed_headers, monkeypatch):
+    from app.services import speaker as speaker_module
+
+    monkeypatch.setattr(settings, "speaker", "pc")
+    monkeypatch.setattr(speaker_module, "play", lambda _audio: True)
+    r = client.post("/chime", headers=authed_headers)
+    assert r.status_code == 200
+    assert r.json()["played"] is True
+
+
 def test_cors_preflight_no_wildcards(client):
     """iOS 12 Safari rejects "*" in Access-Control-Allow-Methods/-Headers
     (wildcards landed in Safari 13.1), so every request carrying the token

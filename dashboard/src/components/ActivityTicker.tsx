@@ -12,12 +12,17 @@ interface Props {
   events: EventLogEntry[];
   connected: boolean;
   failed: boolean;
+  /* False while the full activity feed is open: the feed announces the same
+   * events, and reading the newest event from two live regions at once makes
+   * a screen reader say it twice back-to-back. The ticker itself stays
+   * visible — only the announcement defers to the feed. */
+  announce?: boolean;
 }
 
 /* Mockup 1k: the last three events on one line. The full EventFeed panel still
  * exists below — this is what the dashboard shows when it is being glanced at
  * rather than read. */
-export function ActivityTicker({ events, connected, failed }: Props) {
+export function ActivityTicker({ events, connected, failed, announce = true }: Props) {
   return (
     <section className="ticker">
       <span className="ticker__label">Live activity</span>
@@ -36,7 +41,7 @@ export function ActivityTicker({ events, connected, failed }: Props) {
             <span
               key={e.id}
               className="ticker__event"
-              {...(i === 0 ? { 'aria-live': 'polite' } : {})}
+              {...(i === 0 && announce ? { 'aria-live': 'polite' } : {})}
             >
               <span className={`tag tag--${e.type}`}>{LABELS[e.type] ?? e.type}</span>
               {e.text ? <span className="ticker__text">{e.text}</span> : null}

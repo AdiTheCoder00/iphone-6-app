@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     tts_voice: str = Field("am_michael", validation_alias="TTS_VOICE")
     tts_speed: float = Field(1.0, ge=0.5, le=2.0, validation_alias="TTS_SPEED")
 
+    # Where the companion's voice plays:
+    #   "phone" — the phone's own speaker, as always (default).
+    #   "pc"    — the PC's default output device (an Echo in Bluetooth speaker
+    #             mode, or a wired speaker). The backend plays each rendered
+    #             clip locally; the phone mutes itself and keeps the audio
+    #             only to pace the face. Windows only — on other platforms
+    #             "pc" degrades to the phone speaking.
+    speaker: str = Field("phone", pattern="^(phone|pc)$", validation_alias="SPEAKER")
+
     # Persistence. One SQLite file for reminders and conversation history.
     db_path: str = Field("data/companion.db", validation_alias="DB_PATH")
     # How many past messages to replay into a fresh page load.
