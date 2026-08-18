@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Lenis from 'lenis';
 import { api, loadSettings, saveSettings, type Settings } from './api';
 import { useEvents, usePoll } from './hooks';
 import { StatusBar } from './components/StatusBar';
@@ -25,6 +26,23 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(!settings.token);
   const [pairing, setPairing] = useState(false);
   const [feedOpen, setFeedOpen] = useState(false);
+
+  /* Lenis smooths the window scroll: wheel/touch input is eased through a
+   * rAF loop instead of jumping with the native momentum. Destroyed on
+   * unmount so nothing survives the dashboard being rebuilt. */
+  useEffect(() => {
+    const lenis = new Lenis({ duration: 1.1, smoothWheel: true });
+    let rafId = 0;
+    const raf = (time: number) => {
+      lenis.raf(time);
+      rafId = requestAnimationFrame(raf);
+    };
+    rafId = requestAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(rafId);
+      lenis.destroy();
+    };
+  }, []);
 
   const updateSettings = useCallback((next: Settings) => {
     saveSettings(next);
