@@ -188,9 +188,21 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* The face centres in the content box above the sheet; this margin settles
+     the whole assembly a further 16px down the stage (the flex box is the
+     face plus its margin, so half the margin is swallowed by the centring).
+     While a reply bubble is up the face must hug its anchored top instead —
+     #bubble[data-visible="true"] ~ .face zeroes this margin. */
+  margin-top: 32px;
   animation: breathe 4.6s ease-in-out infinite;
   will-change: transform;
 }
+
+/* A reply owns the bottom of the content box: the face snaps back to the
+   top anchor (padding-top: 34px on the face-root) so the bubble never
+   reaches the mouth. updateVisibility() toggles this class — a sibling
+   selector cannot (the bubble comes after the face in the DOM). */
+.face-root.bubble-up .face { margin-top: 0; }
 
 .face__eyes {
   display: flex;
@@ -373,7 +385,9 @@ html, body {
    ========================================================================= */
 .glance {
   position: absolute;
-  top: 52px;
+  /* 68px, not 52: the face sits 16px lower now (its .face margin-top), and
+     the readout keeps the same gap above it rather than drifting apart. */
+  top: 68px;
   left: 0; right: 0;
   z-index: 1;
   /* Without this the date+weather line ran flush into both screen edges. */
@@ -3216,9 +3230,15 @@ window.CompanionGlance = (function () {
 
   function updateVisibility() {
     var quiet = QUIET_EMOTIONS[window.Companion.current()] === true;
-    var bubbleUp = document.getElementById('bubble').getAttribute('data-visible') === 'true';
+    var bubbleEl = document.getElementById('bubble');
+    var bubbleUp = bubbleEl.getAttribute('data-visible') === 'true';
     var composerUp = document.getElementById('composer').getAttribute('data-open') === 'true';
     glance.setAttribute('data-visible', quiet && !bubbleUp && !composerUp ? 'true' : 'false');
+    /* While a reply owns the bottom band, the face hugs the top anchor of
+       the content box — the idle face's settling margin would push the
+       mouth into the bubble's path (see .face and .face-root.bubble-up in
+       section 2). */
+    document.getElementById('face').classList.toggle('bubble-up', bubbleUp);
   }
 
   async function refreshWeather() {
