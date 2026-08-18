@@ -168,6 +168,11 @@ html, body {
   z-index: 1;
   flex: 1 1 auto;
   display: flex;
+  /* Column, not row: the reply bubble joins as a flex child and the face
+     re-centres in the space left above it, instead of the bubble floating
+     over the eyes as a hard-coded overlay. Hidden (display:none) the bubble
+     takes no space and the face centres exactly as before. */
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   /* Nudges the face toward the optical centre of the whole screen rather than
@@ -403,15 +408,16 @@ html, body {
    4. CHAT LAYER — speech bubble, input row, bottom dock.
    ========================================================================= */
 .bubble {
-  position: absolute;
-  left: 24px;
-  right: 24px;
-  /* Sits low, just above the dock, and grows upward into the gap below the
-     face. At the old bottom:172/max-height:132 a 220-character reply was
-     clipped AND auto-dismissed — text you cannot finish reading before it
-     disappears. The model targets ~200 chars but overshoots. */
-  bottom: 86px;
-  z-index: 3;
+  /* A flex child of .face-root: while a reply is up, the face re-centres in
+     the space above and this bubble owns the gap below the mouth, so a
+     full-length reply can never cover the eyes. margin-top:auto absorbs the
+     free space above (the face hugs the top); margin-bottom:62px clears the
+     status band, which owns the top 54px above the sheet. At the old
+     bottom:172/max-height:132 a 220-character reply was clipped AND
+     auto-dismissed — text you cannot finish reading before it disappears.
+     The model targets ~200 chars but overshoots. */
+  margin: auto 24px 62px;
+  align-self: stretch;
   padding: 13px 16px;
   border-radius: 18px;
   background: rgba(22, 30, 36, 0.92);
@@ -467,8 +473,19 @@ html, body {
 
 /* Image bubbles (screenshot, Wi-Fi QR) — the image fills the bubble and the
    dark text styling must not apply to it. The 240px QR must be fully
-   scannable, so image bubbles escape the 186px text-bubble height cap. */
-.bubble[data-image="true"] { padding: 10px; max-height: none; }
+   scannable, so image bubbles escape the 186px text-bubble height cap. They
+   are deliberately NOT flex children: the QR needs the whole stage, so they
+   overlay it (the face yields — this is a temporary scan surface), where a
+   text reply re-flows the face instead. */
+.bubble[data-image="true"] {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: calc(var(--deck-h) + 62px);
+  z-index: 3;
+  padding: 10px;
+  max-height: none;
+}
 .bubble__image {
   display: block;
   width: 100%;
@@ -1025,8 +1042,13 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 /* The face centres in the space ABOVE the sheet rather than the whole screen,
    so raising the sheet does not push the eyes off-centre. The 34px optical
    nudge goes with it: with the sheet occupying the lower half there is no
-   longer a tall empty space below the face to compensate for. */
-.face-root { padding-bottom: var(--deck-h); padding-top: 0; }
+   longer a tall empty space below the face to compensate for. padding-top is
+   back in so the chat bubble, a flex child, can own the bottom of the content
+   box (margin-bottom: 62px -> bubble bottom at y307) while the face anchors
+   34px below the top edge instead of flushing against it. Content box =
+   667 - 34 - (298 + 34) = 301px -> the idle face still centres at y127,
+   exactly where it sat before the bubble became a flex child. */
+.face-root { padding-top: 34px; padding-bottom: calc(var(--deck-h) + 34px); }
 
 .deck {
   position: absolute;
@@ -1172,8 +1194,10 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 
 /* The bubble clears the sheet AND the status band (which owns the top 54px
    above the sheet): with the old deck-h+14 the bubble's bottom sat behind
-   the band whenever the DND chip row was up. */
-.bubble { bottom: calc(var(--deck-h) + 62px); max-height: 150px; }
+   the band whenever the DND chip row was up. The position itself comes from
+   the flex rule in section 4 — margin-top:auto + margin-bottom:62px inside
+   .face-root, whose padding-bottom already ends at the sheet. */
+.bubble { max-height: 150px; }
 
 /* Backend down: the error strip wins over a stale bubble — yesterday's reply
    next to "can't reach the backend" reads as if the reply were live. The
@@ -1560,6 +1584,11 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       </div>
       <div class="face__mouth"><div class="mouth__arc"></div></div>
     </div>
+    <!-- CHAT BUBBLE — a flex child of the face-root, not a sibling: the face
+         re-centres above it and a full-length reply never covers the eyes.
+         (The comment for .bubble in section 4 of the stylesheet explains the
+         geometry.) -->
+    <div class="bubble" id="bubble" data-visible="false" role="region" aria-label="Companion message" aria-live="polite"></div>
     <!-- Shown only while data-emotion is "think" (mockup 3a). aria-hidden: the
          reply itself is announced by the bubble's own live region, and a
          second announcement for "thinking…" would talk over it. -->
@@ -1570,7 +1599,6 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   <!-- ------------------------------------------------------------- CHAT -->
   <!-- A region supports the reminder action buttons; a `status` role must not
        contain interactive controls. aria-live still announces new messages. -->
-  <div class="bubble" id="bubble" data-visible="false" role="region" aria-label="Companion message" aria-live="polite"></div>
 
   <form class="composer" id="composer" data-open="false" autocomplete="off">
     <div class="composer__row">
