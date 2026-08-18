@@ -477,6 +477,11 @@ html, body {
   opacity: 1;
   transform: translateY(0);
 }
+/* A reply taller than the 150px cap scrolls inside the bubble — and a
+   scrollable bubble must catch touches, or the scroll never starts and the
+   auto-dismiss (paused while a finger is on it, see showBubble) would hide
+   the text mid-read. */
+.bubble[data-visible="true"][data-scroll="true"] { pointer-events: auto; }
 .bubble[data-error="true"] { border-color: rgba(224, 122, 122, 0.35); color: #e6c7c7; }
 .bubble[data-actions="true"] { pointer-events: auto; }
 .bubble__actions {
@@ -525,7 +530,10 @@ html, body {
   left: 24px;
   right: 24px;
   bottom: calc(var(--deck-h) + 62px);
-  z-index: 3;
+  /* Above the dim overlay (z 5): a QR shown while dimming is active must
+     stay scannable, not sit under a black veil. The settings sheet (z 6,
+     later in the DOM) still paints over it, which is the design. */
+  z-index: 6;
   margin: 0;
   padding: 10px;
   border-width: 1px;
@@ -556,12 +564,9 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  opacity: 0;
-  transform: translateY(10px);
+  opacity: 1;
   transition: opacity 240ms cubic-bezier(0.4,0,0.2,1), transform 240ms cubic-bezier(0.4,0,0.2,1);
-  pointer-events: none;
 }
-.composer[data-open="true"] { opacity: 1; transform: translateY(0); pointer-events: auto; }
 
 .composer__row {
   display: flex;
@@ -1241,9 +1246,6 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
   left: 16px;
   right: 80px;
   bottom: calc(20px + var(--kb, 0px));
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
 }
 /* Tools only appear once you are actually typing. */
 .composer__tools { display: none; }
@@ -1650,7 +1652,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
   <!-- A region supports the reminder action buttons; a `status` role must not
        contain interactive controls. aria-live still announces new messages. -->
 
-  <form class="composer" id="composer" data-open="false" autocomplete="off">
+  <form class="composer" id="composer" autocomplete="off">
     <div class="composer__row">
       <input class="composer__input" id="composerInput" type="text" placeholder="Say something…"
              maxlength="2000" enterkeyhint="send" aria-label="Message" />
@@ -1715,7 +1717,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
       </div>
       <p class="pair__alt">not it? <button type="button" id="pairGoScan">scan a code instead</button></p>
       <div class="pair__foot">
-        <div class="pair__status" id="pairFindStatus" data-state="idle"></div>
+        <div class="pair__status" id="pairFindStatus" data-state="idle" role="status"></div>
         <button class="pair__btn" id="pairConfirm" type="button">Pair with this one</button>
       </div>
     </div>
@@ -1746,7 +1748,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
                autocapitalize="off" spellcheck="false" placeholder="Access token" aria-label="Access token" />
       </div>
       <div class="pair__foot">
-        <div class="pair__status" id="pairStatus" data-state="idle"></div>
+        <div class="pair__status" id="pairStatus" data-state="idle" role="status"></div>
         <button class="pair__btn" id="pairSubmit" type="button">Pair</button>
       </div>
     </div>
@@ -1831,7 +1833,7 @@ body[data-standalone="true"] .dock { opacity: 1; pointer-events: auto; }
           Access token <span class="field__value">must match backend</span>
         </label>
         <input class="field__input" id="setToken" type="password" inputmode="text"
-               autocapitalize="off" autocorrect="off" spellcheck="false"
+               autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off"
                placeholder="COMPANION_TOKEN from backend/.env" />
       </div>
 
@@ -2489,7 +2491,31 @@ window.CompanionSpeech = (function () {
     window.Companion.stopTalking();
   }
 
+  /* A playback that stalls or is interrupted (backgrounding, a Wi-Fi drop, a
+     half-read blob) never fires 'ended' — without a watchdog the mouth's rAF
+     loop would keep scheduling on a dead element forever, animating a face
+     with no sound on a kiosk that stays up for days. Only armed while the
+     loop is actually running: cancel() already cleans up, so the 'pause' its
+     own pause() emits must not arm anything. */
+  var STALL_WATCH_MS = 4000;
+  var stallTimer = null;
+  function clearStallWatch() {
+    if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null; }
+  }
+  function armStallWatch() {
+    if (stallTimer !== null || rafId === null) return;
+    stallTimer = setTimeout(function () {
+      stallTimer = null;
+      cleanup();
+    }, STALL_WATCH_MS);
+  }
+  audio.addEventListener('stalled', armStallWatch);
+  audio.addEventListener('waiting', armStallWatch);
+  audio.addEventListener('pause', armStallWatch);
+  audio.addEventListener('playing', clearStallWatch);
+
   function cleanup() {
+    clearStallWatch();
     stopAnimation();
     if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
   }
@@ -2659,7 +2685,6 @@ window.CompanionChat = (function () {
      only ever needs closing — blur the field, which is what dismisses the
      keyboard. */
   function closeComposer() {
-    composer.setAttribute('data-open', 'false');
     input.blur();
   }
 
@@ -2672,6 +2697,13 @@ window.CompanionChat = (function () {
     bubble.removeAttribute('data-image');
     bubble.setAttribute('data-error', isError ? 'true' : 'false');
     bubble.setAttribute('data-actions', actions ? 'true' : 'false');
+    /* scrollHeight reports the content's natural height even while the
+       bubble is collapsed, so this is true exactly when the text will
+       overflow the 150px cap in .bubble[data-visible="true"] — keep the
+       two in step. Action bubbles never scroll (their own row owns the
+       space and the buttons need their full hit areas). */
+    bubble.setAttribute(
+      'data-scroll', actions ? 'false' : (bubble.scrollHeight > 150 ? 'true' : 'false'));
     if (actions) {
       var actionRow = document.createElement('div');
       actionRow.className = 'bubble__actions';
@@ -2693,6 +2725,7 @@ window.CompanionChat = (function () {
          mid-read, with BUBBLE_MAX_MS as the floor. */
       ? Math.min(BUBBLE_ACTION_MAX_MS, Math.max(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS))
       : Math.min(BUBBLE_MAX_MS, BUBBLE_MIN_MS + text.length * BUBBLE_PER_CHAR_MS);
+    lastHoldMs = hold;
     bubbleTimer = setTimeout(function () {
       bubbleTimer = null;
       if (myBubble !== bubbleId) return;     // a newer bubble already took over
@@ -2700,6 +2733,31 @@ window.CompanionChat = (function () {
       /* Sleep mode must survive a bubble timing out. */
       window.Companion.settle();
     }, hold);
+  }
+
+  /* Long replies scroll inside the bubble; while a finger is on it the
+     auto-dismiss pauses, so the text cannot vanish mid-read. Attached once
+     — the bubble element lives for the page's lifetime. Only armed for
+     scrollable bubbles, so a plain tap never extends a bubble's life. */
+  var lastHoldMs = 0;
+  bubble.addEventListener('touchstart', function () {
+    if (bubble.getAttribute('data-scroll') !== 'true') return;
+    if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+  }, { passive: true });
+  bubble.addEventListener('pointerdown', function () {
+    if (bubble.getAttribute('data-scroll') !== 'true') return;
+    if (bubbleTimer !== null) { clearTimeout(bubbleTimer); bubbleTimer = null; }
+  });
+  bubble.addEventListener('touchend', resumeScrollDismiss);
+  bubble.addEventListener('pointerup', resumeScrollDismiss);
+  function resumeScrollDismiss() {
+    if (bubble.getAttribute('data-scroll') !== 'true') return;
+    if (bubbleTimer !== null || bubble.getAttribute('data-visible') !== 'true') return;
+    bubbleTimer = setTimeout(function () {
+      bubbleTimer = null;
+      bubble.setAttribute('data-visible', 'false');
+      window.Companion.settle();
+    }, lastHoldMs);
   }
 
   /* An image bubble (screenshot, QR). Accepts either a blob URL (a screenshot)
@@ -2712,6 +2770,7 @@ window.CompanionChat = (function () {
     if (imageUrl !== null) { URL.revokeObjectURL(imageUrl); imageUrl = null; }
     var myBubble = ++bubbleId;
     bubble.textContent = '';
+    bubble.removeAttribute('data-scroll');
     bubble.setAttribute('data-error', 'false');
     bubble.setAttribute('data-actions', 'false');
     bubble.setAttribute('data-image', 'true');
@@ -2852,11 +2911,15 @@ window.CompanionChat = (function () {
         return;
       }
 
-      conversation.push({ role: 'assistant', content: data.reply });
+      /* The model promises a string; a malformed reply (missing or wrong-typed
+         field) must not push "undefined" into the conversation or print it in
+         the bubble. The face still reacts, the reply is just empty. */
+      var reply = typeof data.reply === 'string' ? data.reply : '';
+      conversation.push({ role: 'assistant', content: reply });
       trimHistory();
       window.Companion.setEmotion(data.emotion || 'idle');
-      showBubble(data.reply, false);
-      window.CompanionSpeech.speak(data.reply);
+      showBubble(reply, false);
+      window.CompanionSpeech.speak(reply);
     } catch (err) {
       clearTimeout(thinkTimer);
       console.error('[Companion] chat failed:', err);
@@ -3047,7 +3110,12 @@ window.CompanionChat = (function () {
         /* A fired reminder, a finished timer and an unprompted line render
            identically — all are the companion speaking without being asked. */
         window.Companion.setEmotion(event.emotion || 'happy');
-        if (event.type === 'timer') window.CompanionSpeech.chime();
+        /* DND gates the chime too: a finished timer is the one thing that
+           would otherwise still announce itself through a deliberately
+           quiet room. The bubble still shows. */
+        if (event.type === 'timer' && !window.CompanionConfig.get('dnd')) {
+          window.CompanionSpeech.chime();
+        }
         if (event.type === 'reminder' && typeof event.id === 'number') showReminder(event.text, event.id);
         else showBubble(event.text, false);
         window.CompanionSpeech.speak(event.text);
@@ -3232,8 +3300,7 @@ window.CompanionGlance = (function () {
     var quiet = QUIET_EMOTIONS[window.Companion.current()] === true;
     var bubbleEl = document.getElementById('bubble');
     var bubbleUp = bubbleEl.getAttribute('data-visible') === 'true';
-    var composerUp = document.getElementById('composer').getAttribute('data-open') === 'true';
-    glance.setAttribute('data-visible', quiet && !bubbleUp && !composerUp ? 'true' : 'false');
+    glance.setAttribute('data-visible', quiet && !bubbleUp ? 'true' : 'false');
     /* While a reply owns the bottom band, the face hugs the top anchor of
        the content box — the idle face's settling margin would push the
        mouth into the bubble's path (see .face and .face-root.bubble-up in
@@ -3279,7 +3346,6 @@ window.CompanionGlance = (function () {
   window.Companion.onChange(updateVisibility);
   var observer = new MutationObserver(updateVisibility);
   observer.observe(document.getElementById('bubble'), { attributes: true, attributeFilter: ['data-visible'] });
-  observer.observe(document.getElementById('composer'), { attributes: true, attributeFilter: ['data-open'] });
 
   window.CompanionConfig.onChange(function (key) {
     if (key === 'city' || key === 'backendUrl') refreshWeather();
@@ -3324,9 +3390,17 @@ window.CompanionGlance = (function () {
   var STAGE_WIDTH = 375;
   var STAGE_HEIGHT = 667;
   var stageScale = 1;
+  /* Deferred: iOS fires resize repeatedly while the keyboard animates in or
+     the browser chrome settles, and each run is a full layout+composite of
+     the scaled stage. One pass 150ms after the storm settles is plenty. */
+  var fitTimer = null;
   var fitStage = function () {
-    stageScale = Math.min(1, window.innerWidth / STAGE_WIDTH, window.innerHeight / STAGE_HEIGHT);
-    stage.style.transform = stageScale < 1 ? 'scale(' + stageScale + ')' : '';
+    if (fitTimer !== null) return;
+    fitTimer = setTimeout(function () {
+      fitTimer = null;
+      stageScale = Math.min(1, window.innerWidth / STAGE_WIDTH, window.innerHeight / STAGE_HEIGHT);
+      stage.style.transform = stageScale < 1 ? 'scale(' + stageScale + ')' : '';
+    }, 150);
   };
   window.addEventListener('resize', fitStage);
   fitStage();
@@ -3641,8 +3715,11 @@ window.CompanionGlance = (function () {
         /* iOS 12/13 predate the clipboard API — fall back to the selection
            path and report honestly. execCommand('copy') usually fails here
            because the tap's user activation has expired by the time the
-           fetch resolved; the textarea is still selected, so the user can
-           long-press and Copy, and the bubble says so either way. */
+           fetch resolved. The textarea stays MOUNTED (off-screen, readonly
+           so no keyboard pops) so the selection survives the immediate copy
+           failure and the user can long-press and Copy at leisure; it is
+           removed on the next tap anywhere. Removing it immediately — the
+           old behaviour — killed the selection along with the element. */
         if (navigator.clipboard && navigator.clipboard.writeText) {
           try {
             await navigator.clipboard.writeText(text);
@@ -3653,18 +3730,33 @@ window.CompanionGlance = (function () {
             return;
           }
         }
-        var hold = window.CompanionChat.showBubble;
         var ta = document.createElement('textarea');
         ta.value = text;
+        ta.readOnly = true;
+        ta.setAttribute('aria-label', 'Conversation export');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '0';
+        ta.style.width = '1px';
+        ta.style.height = '1px';
         document.body.appendChild(ta);
         ta.focus();
         ta.select();
-        /* The selection survives, so the user can long-press and Copy even
-           if the immediate copy attempt fails. */
         var copied = false;
         try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
-        ta.remove();
-        hold(copied ? 'conversation copied to clipboard' : 'could not copy the conversation', !copied);
+        /* The long-press the user needs starts ON the textarea, so a
+           document-level tap handler only fires once they move on — which is
+           exactly when the mounted selection should go away. */
+        function removeTa() {
+          document.removeEventListener('pointerdown', removeTa);
+          document.removeEventListener('touchstart', removeTa);
+          if (ta.parentNode) ta.parentNode.removeChild(ta);
+        }
+        document.addEventListener('pointerdown', removeTa);
+        document.addEventListener('touchstart', removeTa);
+        window.CompanionChat.showBubble(
+          copied ? 'conversation copied to clipboard' : 'could not copy — long-press the selected text and Copy',
+          !copied);
       }
     } catch (e) {
       window.CompanionChat.showBubble('could not download the conversation', true);
@@ -3732,8 +3824,11 @@ window.CompanionGlance = (function () {
   var pressStart = null;
 
   function beginPress(x, y, target) {
-    /* Never hijack a press that starts on an interactive control. */
-    if (target && target.closest && target.closest('button, input, .settings')) return;
+    /* Never hijack a press that starts on an interactive control — or on
+       the bubble: a long-press on a reply is a read gesture, and opening
+       settings from under it would steal the text mid-read. */
+    if (target && target.closest &&
+        target.closest('button, input, .settings, .bubble')) return;
     pressStart = { x: x, y: y };
     pressTimer = setTimeout(function () {
       pressTimer = null;
@@ -3776,13 +3871,8 @@ window.CompanionGlance = (function () {
       dockHideTimer = null;
       /* Never yank the controls away mid-interaction. */
       if (window.CompanionVoice && window.CompanionVoice.isRecording()) { revealDock(); return; }
-      if (composerIsOpen()) { revealDock(); return; }
       dock.removeAttribute('data-revealed');
     }, DOCK_REVEAL_MS);
-  }
-
-  function composerIsOpen() {
-    return document.getElementById('composer').getAttribute('data-open') === 'true';
   }
 
   /* Using the dock keeps it up. */
@@ -4049,7 +4139,12 @@ window.CompanionVoice = (function () {
     /* The slash over the mic must be honest: with DND on the wake handler
        drops wakes and speak() refuses to talk, so the mic must not record —
        otherwise the button captures audio while claiming it does not. */
-    if (window.CompanionConfig.get('dnd')) return;
+    if (window.CompanionConfig.get('dnd')) {
+      /* Dead-silent no-ops read as a broken button; say why it did
+         nothing. The chip itself is the way out. */
+      window.CompanionChat.showBubble('do not disturb is on — tap the chip to unmute the mic', false);
+      return;
+    }
     if (!supported || recording || window.CompanionChat.isBusy()) return;
 
     /* Barge-in: reaching for the mic means "stop, listen to me". Without this
@@ -4748,9 +4843,14 @@ window.CompanionVoice = (function () {
 
   /* --- camera + decode (1d) ---------------------------------------------- */
 
+  /* Cached: the script tag is appended once and its promise memoized, so a
+     second startCamera (dismiss, open, dismiss again) never re-injects
+     jsqr.js — and two in-flight loads can never race each other's onload. */
+  var decoderPromise = null;
   function loadDecoder() {
     if (window.jsQR) return Promise.resolve(window.jsQR);
-    return new Promise(function (resolve, reject) {
+    if (decoderPromise) return decoderPromise;
+    decoderPromise = new Promise(function (resolve, reject) {
       var s = document.createElement('script');
       /* Same origin as this page — it is served by serve_frontend.py, which
          must list /jsqr.js in ALLOWED_PATHS or this 404s. */
@@ -4759,6 +4859,7 @@ window.CompanionVoice = (function () {
       s.onerror = function () { reject(new Error('decoder unavailable')); };
       document.head.appendChild(s);
     });
+    return decoderPromise;
   }
 
   function stopCamera() {
@@ -4947,6 +5048,19 @@ window.CompanionVoice = (function () {
     /* The chip is the way back out, so it has to say what tapping it does. */
     chip.textContent = 'Do not disturb';
     chip.setAttribute('aria-label', 'Do not disturb is on. Tap to turn it off.');
+    /* The mic's affordance must be honest: with DND on the button records
+       nothing (beginRecording gates on it), so a mic that still looks and
+       reads as live is a dead button in disguise. */
+    var mic = document.getElementById('micBtn');
+    if (mic) {
+      if (on) {
+        mic.setAttribute('aria-disabled', 'true');
+        mic.setAttribute('aria-label', 'Do not disturb is on — tap the chip above to unmute the mic');
+      } else {
+        mic.removeAttribute('aria-disabled');
+        mic.setAttribute('aria-label', 'Hold to talk');
+      }
+    }
   }
 
   function set(on) {

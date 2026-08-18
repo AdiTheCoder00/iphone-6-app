@@ -180,7 +180,8 @@ export function NowPlayingHero({
                 />
               </div>
               <span className="hero__time">
-                vol {status.volume_percent}%{status.muted ? ' · muted' : ''}
+                vol {Math.max(0, Math.min(100, status.volume_percent))}%
+                {status.muted ? ' · muted' : ''}
               </span>
             </>
           ) : null}

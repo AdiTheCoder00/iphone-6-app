@@ -80,6 +80,10 @@ async def list_devices() -> list[dict]:
 
     devices = []
     for entity in states:
+        # One malformed element (null, a string, a new HA version's shape)
+        # must not crash the whole list — skip it, the rest are still useful.
+        if not isinstance(entity, dict):
+            continue
         entity_id = entity.get("entity_id", "")
         domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
         if domain not in CONTROLLABLE_DOMAINS:

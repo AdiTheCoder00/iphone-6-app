@@ -24,6 +24,11 @@ HISTORY_TURNS = 6
 # bounded total, never a stall for minutes.
 RATE_LIMIT_RETRY_CAP_SECONDS = 30.0
 
+# Floor on an individual 429 retry wait. Groq's Retry-After can be zero
+# ("try again in 0s") and a zero wait would busy-spin the retry loop without
+# advancing the cumulative cap — hammering the provider instead of waiting.
+MIN_RETRY_WAIT_SECONDS = 0.5
+
 # Tool calls allowed per user message before the model is forced to answer.
 # Two covers the realistic chains (look something up, then act on it) while
 # making an infinite tool loop structurally impossible.
@@ -298,21 +303,25 @@ def _retry_after(response: httpx.Response) -> float:
 
     Prefers the Retry-After header (RFC 7231: an integer number of seconds, or
     an HTTP-date), then Groq's body copy "Please try again in 17.775s". Bounded
-    by RATE_LIMIT_RETRY_CAP_SECONDS so a broken answer cannot stall a turn.
+    by RATE_LIMIT_RETRY_CAP_SECONDS so a broken answer cannot stall a turn,
+    and floored so a zero answer ("try again in 0s") cannot turn the retry
+    loop into a busy spin that hammers the provider.
     """
+    wait: float | None = None
     header = response.headers.get("Retry-After", "")
     if header:
         if header.isdigit():
-            return min(float(header), RATE_LIMIT_RETRY_CAP_SECONDS)
-        try:
-            when = email.utils.parsedate_to_datetime(header).timestamp()
-            return min(max(when - time.time(), 0.0), RATE_LIMIT_RETRY_CAP_SECONDS)
-        except (TypeError, ValueError):
-            pass
-    m = re.search(r"try again in\s+([\d.]+)s", response.text or "", re.IGNORECASE)
-    if m:
-        return min(float(m.group(1)), RATE_LIMIT_RETRY_CAP_SECONDS)
-    return RATE_LIMIT_RETRY_CAP_SECONDS
+            wait = float(header)
+        else:
+            try:
+                when = email.utils.parsedate_to_datetime(header).timestamp()
+                wait = when - time.time()
+            except (TypeError, ValueError):
+                pass
+    if wait is None:
+        m = re.search(r"try again in\s+([\d.]+)s", response.text or "", re.IGNORECASE)
+        wait = float(m.group(1)) if m else RATE_LIMIT_RETRY_CAP_SECONDS
+    return min(max(wait, MIN_RETRY_WAIT_SECONDS), RATE_LIMIT_RETRY_CAP_SECONDS)
 
 
 def _strip_wrappers(raw: str) -> str:
@@ -690,8 +699,13 @@ class CompanionService:
         started = time.monotonic()
         fast = await _fast_command(message)
         if fast is not None:
+            # Length, not the text: spoken messages can hold names or
+            # addresses, and the transcribe endpoint already logs only
+            # byte lengths for exactly that reason.
             logger.info(
-                "Fast path handled '%s' in %.2fs", message, time.monotonic() - started
+                "Fast path handled %d-char message in %.2fs",
+                len(message),
+                time.monotonic() - started,
             )
             emotion = await self._classify_emotion(fast)
             return {"reply": fast, "emotion": emotion}
@@ -701,8 +715,7 @@ class CompanionService:
         result = await self._run_tool_loop(message, history_for_pass, facts)
         emotion = await self._classify_emotion(result["reply"])
         logger.info(
-            "Chat turn '%s' took %.2fs (%d tool call(s))",
-            message,
+            "Chat turn took %.2fs (%d tool call(s))",
             time.monotonic() - started,
             result["tool_calls_used"],
         )

@@ -63,6 +63,22 @@ def reminder_event(reminder: dict) -> dict:
     }
 
 
+async def _rearm_undelivered(reminder_id: int) -> None:
+    """EventHub callback: a reminder event's last queue was thrown away
+    before any client consumed it. Re-arm the row so it fires again for the
+    next listener instead of being silently lost."""
+    if await asyncio.to_thread(store.rearm_if_undelivered, reminder_id):
+        logger.warning(
+            "Re-armed reminder %d (last SSE listener left before delivery)",
+            reminder_id,
+        )
+
+
+# Delivery bookkeeping lives in the hub; it needs a row-level re-arm on the
+# other end of the "event died in a discarded queue" case.
+event_hub.set_unclaimed_handler(_rearm_undelivered)
+
+
 class ReminderService:
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -76,12 +92,15 @@ class ReminderService:
     ) -> dict:
         fire_at = datetime.now() + timedelta(minutes=minutes_from_now)
         reminder = store.add_reminder(text, fire_at.timestamp(), repeat=repeat, power_action=power_action)
+        # Length, not the text: reminder texts are dictated personal
+        # reminders and can hold names or addresses. Same rule as the
+        # transcribe endpoint's byte-length logging.
         logger.info(
-            "Reminder %d set for %s%s: %s",
+            "Reminder %d set for %s%s (%d chars)",
             reminder["id"],
             fire_at,
             f" (repeats {repeat})" if repeat else "",
-            text,
+            len(text),
         )
         return {**reminder, "fire_time_dt": fire_at}
 
@@ -89,11 +108,11 @@ class ReminderService:
         """Absolute-time reminder, for 'at 7pm' and recurring clock times."""
         reminder = store.add_reminder(text, fire_time, repeat=repeat)
         logger.info(
-            "Reminder %d set for %s%s: %s",
+            "Reminder %d set for %s%s (%d chars)",
             reminder["id"],
             datetime.fromtimestamp(fire_time),
             f" (repeats {repeat})" if repeat else "",
-            text,
+            len(text),
         )
         return {**reminder, "fire_time_dt": datetime.fromtimestamp(fire_time)}
 
@@ -113,11 +132,7 @@ class ReminderService:
         for row in store.stale_claimed():
             if store.rearm_reminder(row["id"]):
                 rearmed += 1
-                logger.warning(
-                    "Re-armed reminder %d lost to a crash before delivery: %s",
-                    row["id"],
-                    row["text"],
-                )
+                logger.warning("Re-armed reminder %d lost to a crash before delivery", row["id"])
         if rearmed:
             logger.info("Startup reconciliation re-armed %d reminder(s)", rearmed)
         return rearmed
@@ -188,21 +203,19 @@ class ReminderService:
                             reminder["id"], reminder["repeat"], reminder["fire_time"]
                         )
                         logger.info(
-                            "Reminder %d skipped unsent (%.1fh late), recurrence kept (%s): %s",
+                            "Reminder %d skipped unsent (%.1fh late), recurrence kept (%s)",
                             reminder["id"],
                             (now - reminder["fire_time"]) / 3600.0,
                             reminder["repeat"],
-                            reminder["text"],
                         )
                     else:
                         # Terminal, like delivery: this row must never be picked up
                         # by the startup reconciliation and re-fired.
                         store.mark_delivered(reminder["id"])
                         logger.info(
-                            "Reminder %d retired unsent (%.1fh late): %s",
+                            "Reminder %d retired unsent (%.1fh late)",
                             reminder["id"],
                             (now - reminder["fire_time"]) / 3600.0,
-                            reminder["text"],
                         )
             elif reminder.get("power_action"):
                 power.append(reminder)
@@ -228,10 +241,9 @@ class ReminderService:
                             reminder["id"], reminder["repeat"], reminder["fire_time"]
                         )
                         logger.info(
-                            "Reminder %d fired and re-armed (%s): %s",
+                            "Reminder %d fired and re-armed (%s)",
                             reminder["id"],
                             reminder["repeat"],
-                            reminder["text"],
                         )
                     fired.append(reminder)
         except Exception as e:
@@ -259,6 +271,18 @@ class ReminderService:
 
         action = row.get("power_action")
 
+        # Power control can be disabled after this row was scheduled (the
+        # setting gates tool registration, not rows already in the DB). The
+        # action must not run, and the row must not keep re-arming every
+        # tick — retire it silently.
+        if not settings.pc_power_control_enabled:
+            store.mark_delivered(row["id"])
+            logger.info(
+                "Retired scheduled power action %r (power control disabled)",
+                action,
+            )
+            return
+
         def _act() -> None:
             if action == "sleep":
                 pc_control.sleep_pc()
@@ -272,7 +296,7 @@ class ReminderService:
         try:
             await asyncio.to_thread(_act)
             _power_retries.pop(row["id"], None)
-            logger.info("Scheduled power action %r executed: %s", action, row["text"])
+            logger.info("Scheduled power action %r executed", action)
         except Exception as e:
             logger.error("Scheduled power action %r failed: %s", action, e)
             # Re-arm the claim so the next poll retries — a failed scheduled
@@ -311,6 +335,15 @@ class ReminderService:
                     asyncio.to_thread(self.check_reminders)
                 )
                 events, power_actions = await asyncio.shield(claim_task)
+                # Backstop for a claim that slipped through every re-arm path
+                # (a mark_delivered that raised, an unexpected exception in
+                # the delivery bookkeeping). The startup reconcile() covers
+                # rows stranded by a crash; this covers rows stranded at
+                # runtime, so they are not stuck until the next restart. The
+                # grace period keeps a second process's in-flight claims safe.
+                for stale in await asyncio.to_thread(store.stale_claimed):
+                    if await asyncio.to_thread(store.rearm_reminder, stale["id"]):
+                        logger.warning("Re-armed stale claim %d", stale["id"])
                 # A listener can only vanish at an await point, so the check,
                 # every publish and the bookkeeping below stay in one
                 # synchronous stretch: once the check reads listeners > 0, no
@@ -337,7 +370,7 @@ class ReminderService:
                     published.add(fired["id"])
                 for fired in events:
                     await asyncio.to_thread(store.mark_delivered, fired["id"])
-                    logger.info("Reminder %d fired: %s", fired["id"], fired["text"])
+                    logger.info("Reminder %d fired", fired["id"])
                 executed = set()
                 for row in power_actions:
                     # Recorded before the await: to_thread completes the

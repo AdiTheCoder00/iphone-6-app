@@ -55,7 +55,7 @@ class TimerService:
             "minutes": minutes,
             "text": text,
         }
-        logger.info("Timer %d set for %d minute(s): %s", timer_id, minutes, text)
+        logger.info("Timer %d set for %d minute(s)", timer_id, minutes)
         return self._timers[timer_id]
 
     def cancel_by_text(self, text: str) -> tuple[int, str] | None:
@@ -68,7 +68,7 @@ class TimerService:
             haystack = timer["text"].lower()
             if needle in haystack or haystack in needle:
                 self._timers.pop(timer["id"], None)
-                logger.info("Timer %d cancelled: %s", timer["id"], timer["text"])
+                logger.info("Timer %d cancelled", timer["id"])
                 return timer["id"], timer["text"]
         return None
 
@@ -84,7 +84,7 @@ class TimerService:
                 for timer in due:
                     self._timers.pop(timer["id"], None)
                     event_hub.publish(timer_event(timer))
-                    logger.info("Timer %d fired: %s", timer["id"], timer["text"])
+                    logger.info("Timer %d fired", timer["id"])
             except asyncio.CancelledError:
                 raise
             except Exception as e:

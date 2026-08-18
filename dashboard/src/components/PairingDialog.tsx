@@ -38,6 +38,12 @@ const TARGET_PX = 196;
 /* Must match .modal--closing's animation duration in styles.css. */
 const EXIT_MS = 180;
 
+/* Mirrors App's INERT_SUPPORTED: where inert is missing (iOS 12–15.4) the
+ * background stays focusable and the trap below must hard-catch Tabs that
+ * walk out of the modal, because nothing else will. */
+const INERT_SUPPORTED =
+  typeof HTMLElement !== 'undefined' && 'inert' in HTMLElement.prototype;
+
 export function PairingDialog({ settings, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -67,8 +73,10 @@ export function PairingDialog({ settings, onClose }: Props) {
     setClosing(true);
     exitTimer.current = setTimeout(onClose, EXIT_MS);
   }, [onClose]);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (exitTimer.current !== null) clearTimeout(exitTimer.current);
+    if (copyTimer.current !== null) clearTimeout(copyTimer.current);
   }, []);
 
   useEffect(() => {
@@ -139,6 +147,14 @@ export function PairingDialog({ settings, onClose }: Props) {
       const first = list[0];
       const last = list[list.length - 1];
       const active = document.activeElement;
+      /* Without inert the background is still tabbable, so a Tab can walk
+       * straight out of the modal. Catch any Tab whose focus is not inside
+       * the dialog and bounce it back in — the hard fallback. */
+      if (!INERT_SUPPORTED && !(active instanceof Node && modal.contains(active))) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
       if (e.shiftKey && (active === first || active === last || active === modal)) {
         e.preventDefault();
         last.focus();
@@ -158,7 +174,8 @@ export function PairingDialog({ settings, onClose }: Props) {
     try {
       await navigator.clipboard.writeText(settings.token);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       /* Clipboard is permission-gated and blocked outright on insecure
        * origins; the reveal toggle is the fallback, so fail quietly. */

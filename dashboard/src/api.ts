@@ -96,17 +96,31 @@ async function request<T>(
   if (settings.token) headers['X-Companion-Token'] = settings.token;
   if (init.body) headers['Content-Type'] = 'application/json';
 
+  /* One controller serves both the caller's abort and the timeout: a single
+   * signal on the fetch means either abort cancels the request and the body
+   * read, and a caller abort also retires the timeout — without this the
+   * timeout would keep a controller that is attached to nothing, and a
+   * caller abort would no longer be an AbortError on the fetch. */
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const onExternalAbort = () => controller?.abort();
+  if (controller && signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onExternalAbort);
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      if (controller) controller.abort();
+      controller?.abort();
       reject(new Error('Request timed out'));
     }, REQUEST_TIMEOUT_MS);
   });
   try {
     const response = await Promise.race([
-      fetch(base(settings) + path, { ...init, headers, signal: signal ?? controller?.signal }),
+      fetch(base(settings) + path, {
+        ...init,
+        headers,
+        signal: controller ? controller.signal : undefined,
+      }),
       timeout,
     ]);
     if (response.status === 401) throw new UnauthorizedError();
@@ -116,6 +130,7 @@ async function request<T>(
     return (await Promise.race([response.json(), timeout])) as T;
   } finally {
     clearTimeout(timer);
+    if (signal && !signal.aborted) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 

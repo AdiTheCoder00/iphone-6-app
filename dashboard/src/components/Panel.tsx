@@ -56,7 +56,13 @@ export function Panel({
         ) : loading ? (
           <p className="muted">Loading…</p>
         ) : error ? (
-          <p className="error">{error}</p>
+          /* A refresh failure must not blank data the panel already holds:
+           * the banner reports the failure and the list stays on screen. A
+           * first-load failure renders the banner over an empty body. */
+          <>
+            <p className="panel__error">{error}</p>
+            {children}
+          </>
         ) : empty ? (
           <p className="muted">{emptyText}</p>
         ) : (

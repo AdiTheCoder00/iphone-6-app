@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Lenis from 'lenis';
 import { api, loadSettings, saveSettings, type Settings } from './api';
 import { useEvents, usePoll } from './hooks';
@@ -20,6 +20,13 @@ import { EventFeed } from './components/EventFeed';
 const PC_INTERVAL = 5_000;
 const HEALTH_INTERVAL = 10_000;
 const LIST_INTERVAL = 20_000;
+
+/* iOS 12–15.4 has no inert; PairingDialog's hard Tab trap covers the
+ * background there, so App must skip the attribute rather than set it
+ * blindly (setting an unknown attribute is harmless, but it would read as
+ * inert support that isn't there). */
+const INERT_SUPPORTED =
+  typeof HTMLElement !== 'undefined' && 'inert' in HTMLElement.prototype;
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
@@ -48,6 +55,13 @@ export default function App() {
     saveSettings(next);
     setSettings(next);
   }, []);
+
+  /* Memoized: the pairing dialog's focus effect depends on onClose, and a
+   * fresh identity every render (App re-renders on every 5s poll tick)
+   * would re-run the effect on every tick — yanking focus back to Done and
+   * poisoning the focus-restore target mid-interaction. */
+  const closePairing = useCallback(() => setPairing(false), []);
+  const openPairing = useCallback(() => setPairing(true), []);
 
   const health = usePoll(api.health, settings, HEALTH_INTERVAL);
   const pc = usePoll(api.pcStatus, settings, PC_INTERVAL);
@@ -122,16 +136,22 @@ export default function App() {
    * assistive tech and unreachable by keyboard: aria-modal alone is not
    * reliably honoured, and a screen-reader user could otherwise land on the
    * controls behind the dialog. The dialog is rendered OUTSIDE .app (below),
-   * so inerting .app does not touch it. */
-  useEffect(() => {
+   * so inerting .app does not touch it.
+   *
+   * Layout effect, not passive: it must run before the dialog's unmount
+   * cleanup restores focus to the opener, or the inert attribute is still
+   * present when focus() is called and the restore silently fails.
+   * iOS 12–15.4 has no inert support — the attribute is skipped there and
+   * PairingDialog's hard Tab trap covers the background instead. */
+  useLayoutEffect(() => {
     const shell = document.querySelector('.app');
     if (!shell) return;
     if (pairing) {
       shell.setAttribute('aria-hidden', 'true');
-      (shell as HTMLElement).setAttribute('inert', '');
+      if (INERT_SUPPORTED) (shell as HTMLElement).setAttribute('inert', '');
     } else {
       shell.removeAttribute('aria-hidden');
-      shell.removeAttribute('inert');
+      if (INERT_SUPPORTED) shell.removeAttribute('inert');
     }
   }, [pairing]);
 
@@ -147,7 +167,7 @@ export default function App() {
             <h1>Companion</h1>
           </div>
           <div className="topbar__actions">
-            <button type="button" className="btn" onClick={() => setPairing(true)}>
+            <button type="button" className="btn" onClick={openPairing}>
               Pair a phone
             </button>
             <SettingsBar
@@ -181,7 +201,7 @@ export default function App() {
             loading={pc.loading}
             settings={settings}
             onChanged={pc.refresh}
-            onPair={() => setPairing(true)}
+            onPair={openPairing}
             stale={reconnecting}
           />
 
@@ -241,7 +261,7 @@ export default function App() {
       </div>
 
       {pairing ? (
-        <PairingDialog settings={settings} onClose={() => setPairing(false)} />
+        <PairingDialog settings={settings} onClose={closePairing} />
       ) : null}
     </>
   );

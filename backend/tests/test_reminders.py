@@ -222,3 +222,67 @@ async def test_snooze_moves_fired_reminder(fresh_store, no_subscribers, poller):
 def test_snooze_refuses_unfired(fresh_store, no_subscribers):
     row = reminder_service.add("water plants", 30)
     assert reminder_service.snooze(row["id"], 30) is None
+
+
+async def test_hub_rearms_reminder_when_queue_discarded(
+    fresh_store, no_subscribers, monkeypatch
+):
+    """The disconnect-window loss: a reminder handed to a client's queue that
+    is then thrown away before the client consumed it must be re-armed, or the
+    event dies in the discarded queue and the row is marked delivered into the
+    void. The re-arm task runs on the loop after unsubscribe."""
+    monkeypatch.setattr(reminders_mod.asyncio, "to_thread", _direct_call)
+    row = reminder_service.add("call mom", 0)
+    queue = event_hub.subscribe()
+    try:
+        events, _ = reminder_service.check_reminders()  # claim: fired = 1
+        event = reminders_mod.reminder_event(events[0])
+        event_hub.publish(event)
+        event_hub.unsubscribe(queue)  # client left before consuming
+        await asyncio.sleep(0.05)  # let the re-arm task run
+        pending = store.pending_reminders()
+        assert [r["id"] for r in pending] == [row["id"]]
+        # A mark_delivered landing after the re-arm is a no-op (fired = 0),
+        # so the reminder fires again for the next listener instead of being
+        # lost or double-marked.
+        store.mark_delivered(row["id"])
+        assert [r["id"] for r in store.pending_reminders()] == [row["id"]]
+    finally:
+        event_hub.unsubscribe(queue)
+
+
+async def test_hub_ack_prevents_rearm(fresh_store, no_subscribers, monkeypatch):
+    """Once a client actually consumed the reminder event, a later disconnect
+    must not re-arm it: the reminder was delivered, and re-arming would make
+    it fire a second time for the next listener."""
+    monkeypatch.setattr(reminders_mod.asyncio, "to_thread", _direct_call)
+    row = reminder_service.add("call mom", 0)
+    queue = event_hub.subscribe()
+    try:
+        events, _ = reminder_service.check_reminders()  # claim: fired = 1
+        event = reminders_mod.reminder_event(events[0])
+        event_hub.publish(event)
+        event_hub.ack(queue, event)  # consumed
+        event_hub.unsubscribe(queue)
+        await asyncio.sleep(0.05)
+        # Still claimed-and-undelivered is the "no re-arm" signal: the row
+        # must not come back as pending.
+        assert store.pending_reminders() == []
+    finally:
+        event_hub.unsubscribe(queue)
+
+
+def test_rearm_if_undelivered_refuses_delivered_rows(fresh_store, no_subscribers):
+    """The delivered flag wins any race against the disconnect re-arm: a row
+    already marked delivered must never fire again, or the reminder would
+    duplicate for whoever is listening next."""
+    queue = event_hub.subscribe()  # a listener is required for the claim
+    try:
+        row = reminder_service.add("call mom", 0)
+        events, _ = reminder_service.check_reminders()
+        assert [e["id"] for e in events] == [row["id"]]  # claimed: fired = 1
+        store.mark_delivered(row["id"])  # delivered = 1
+        assert store.rearm_if_undelivered(row["id"]) is False
+        assert store.due_reminders() == []  # stays claimed-and-delivered
+    finally:
+        event_hub.unsubscribe(queue)

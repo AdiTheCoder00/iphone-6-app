@@ -96,10 +96,28 @@ export function usePoll<T>(
       cancelled = true;
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
+      /* Abort alone cannot retire a request that has no AbortController
+       * (iOS 12.0/12.1) — and even with one, a fetch already past its
+       * headers will resolve. Bump the generation so a late response is
+       * ignored instead of setting state on an unmounted hook. */
+      runGen.current += 1;
       abortRef.current?.abort();
       abortRef.current = null;
     };
   }, [run, intervalMs]);
+
+  /* A settings change points every poll at a different backend — or at the
+   * same backend through a different token. Data fetched under the old
+   * settings is stale at best and wrong at worst, and keeping it would turn
+   * the next failure into the dimmed "reconnecting" state instead of a clean
+   * "can't reach" banner. The data is dropped and refetched immediately. */
+  const priorSettings = useRef(settings);
+  useEffect(() => {
+    if (priorSettings.current === settings) return;
+    priorSettings.current = settings;
+    setData(null);
+    setError(null);
+  }, [settings]);
 
   return { data, error, loading, refresh: run };
 }
@@ -155,6 +173,12 @@ export function useEvents(settings: Settings, limit = 50) {
       /* retryPending stops a second onerror from scheduling a second
        * EventSource before the first retry fires. */
       if (closed || retryPending) return;
+      /* A backgrounded tab does not need the reconnect loop running for it:
+       * the visibilitychange handler reconnects the moment the page is seen
+       * again, and probing a dead backend in the background just burns radio
+       * time. (The failures counter staying put also keeps the give-up
+       * threshold meaningful — it is only ever tripped by visible retries.) */
+      if (document.hidden) return;
       failures += 1;
       setAttempts(failures);
       if (failures >= SSE_MAX_FAILURES) {

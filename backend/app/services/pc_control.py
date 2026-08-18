@@ -464,6 +464,11 @@ def _run_powershell(script: str) -> str:
 
     Raises PCControlError when powershell itself fails or the script exits
     non-zero, so callers never mistake a failed script for an empty result.
+
+    Output is decoded as UTF-8, not the console codepage: filenames in the
+    user's own language (Devanagari, CJK, accented Latin) would otherwise
+    come back as mojibake from find_files. The script pins the console
+    encoding first so the bytes actually arrive as UTF-8.
     """
     import subprocess
 
@@ -476,10 +481,12 @@ def _run_powershell(script: str) -> str:
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                script,
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " + script,
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_POWERSHELL_TIMEOUT,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -534,9 +541,14 @@ def capture_screenshot(path: str) -> None:
         "$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;"
         "$bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height);"
         "$g = [System.Drawing.Graphics]::FromImage($bmp);"
+        "try {"
         "$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size);"
         f"$bmp.Save({_ps_literal(path)}, [System.Drawing.Imaging.ImageFormat]::Png);"
-        "$g.Dispose(); $bmp.Dispose()"
+        "} finally {"
+        # A failed CopyFromScreen/Save must not leak the GDI handles; they
+        # would otherwise stay pinned until GC (or the process exits).
+        "$g.Dispose(); $bmp.Dispose();"
+        "}"
     )
     _run_powershell(script)
 

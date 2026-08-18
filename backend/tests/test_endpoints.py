@@ -290,3 +290,78 @@ def test_conversation_endpoints(client, authed_headers, fresh_store):
 # NOTE: the find_files PowerShell-injection case is deliberately NOT a test
 # here — it needs a live recursive scan of the user's real folders, which is
 # far too slow for a unit suite. The escaping fix was verified manually.
+
+
+def test_token_redacting_filter_strips_tickets_and_tokens(monkeypatch):
+    """The access-log filter must remove one-time SSE tickets from query
+    strings and replace the shared token with a placeholder — logs sit next
+    to the repo on disk, and the ticket is only good while the log line is
+    fresh."""
+    import logging
+
+    from app.main import _TokenRedactingFilter
+
+    monkeypatch.setattr(settings, "companion_token", "shared-secret-abc")
+    filt = _TokenRedactingFilter()
+
+    def record(path):
+        return logging.LogRecord(
+            "uvicorn.access", logging.INFO, "x", 0, '%s - "%s %s HTTP/1.1" %d',
+            ("192.168.1.5", "GET", path, 200), None,
+        )
+
+    # Ticket query param is stripped entirely, its neighbours survive.
+    r = record("/events?ticket=tkt-123&keep=1")
+    assert filt.filter(r) is True
+    assert "tkt-123" not in str(r.args[2])
+    assert "ticket=" not in str(r.args[2])
+    assert "keep=1" in str(r.args[2])
+    # A bare token embedded in the path is replaced, not left readable.
+    r = record("/x?token=shared-secret-abc")
+    assert filt.filter(r) is True
+    assert "shared-secret-abc" not in str(r.args[2])
+    # Short arg tuples (no path) are left untouched.
+    r = logging.LogRecord("u", logging.INFO, "x", 0, "booted", (), None)
+    assert filt.filter(r) is True
+    assert r.args == ()
+
+
+def test_body_size_middleware_rejects_oversized_uploads(monkeypatch):
+    """The Content-Length gate must 413 before Starlette spools the body to
+    disk — the disk-fill defence. Exercised directly against a stub app,
+    since the real app binds its caps at construction time."""
+    import asyncio
+
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    from app.main import BodySizeLimitMiddleware
+
+    monkeypatch.setattr(settings, "max_audio_mb", 0.001)  # ~1 KB cap
+
+    async def call_next(_request):
+        return JSONResponse({"ok": True})
+
+    def dispatch(path: str, content_length: str):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"content-length", content_length.encode())],
+            "query_string": b"",
+            "client": None,
+            "server": None,
+            "scheme": "http",
+            "root_path": "",
+        }
+        middleware = BodySizeLimitMiddleware(call_next)
+        return asyncio.run(middleware.dispatch(Request(scope), call_next))
+
+    over = dispatch("/transcribe", "999999999")
+    assert over.status_code == 413
+    assert "exceeds" in over.body.decode()
+    # A within-cap upload passes straight through to the endpoint.
+    within = dispatch("/transcribe", "100")
+    assert within.status_code == 200
+    # The cap applies per path: /transcribe's cap does not cover /vision.
+    assert dispatch("/vision", "999999999").status_code == 413

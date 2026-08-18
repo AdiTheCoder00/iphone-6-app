@@ -108,6 +108,12 @@ class ProactiveService:
             logger.info("Proactive line fell back to canned (%s)", e)
             text, emotion = random.choice(fallback), default_emotion
 
+        # Rule 1, re-checked at the point of no return: the morning and rain
+        # pushes take ~30s (briefing + LLM), and every listener can leave in
+        # that time. Publishing into the void is exactly the "speak to an
+        # empty room" the rule exists to prevent.
+        if event_hub.subscriber_count == 0:
+            return
         event_hub.publish({"type": "proactive", "text": text, "emotion": emotion})
         logger.info("Proactive push: %r (%s)", text, emotion)
 
@@ -158,14 +164,17 @@ class ProactiveService:
             "Two short sentences at most, warm and plain."
         )
 
-    def _save_date(self, key: str, value: str) -> None:
+    async def _save_date(self, key: str, value: str) -> None:
         """Persist a fired-once-per-day marker so a restart mid-morning does
         not re-fire the greeting or the rain check. Best-effort: losing the
         write only costs a duplicate push next boot."""
         try:
             from app.services.store import store
 
-            store.set_kv(key, value)
+            # SQLite write on the event loop would block every await in the
+            # process for the commit's duration — same rule as everywhere
+            # else in the app, keep it off the loop.
+            await asyncio.to_thread(store.set_kv, key, value)
         except Exception as e:
             logger.warning("Could not persist %s: %s", key, e)
 
@@ -194,7 +203,7 @@ class ProactiveService:
             and now.hour == settings.proactive_morning_hour
         ):
             self._last_morning_date = today
-            self._save_date("proactive.morning_date", today)
+            await self._save_date("proactive.morning_date", today)
             # The briefing (weather + headline feeds) and the LLM call can
             # take ~30s; holding the tick would delay every other nudge
             # behind the morning greeting.
@@ -213,7 +222,7 @@ class ProactiveService:
             and self._last_rain_date != today
         ):
             self._last_rain_date = today
-            self._save_date("proactive.rain_date", today)
+            await self._save_date("proactive.rain_date", today)
             self._detach(self._push_rain_alert())
 
         # --- battery-low nudge (laptops only; desktops have no battery)

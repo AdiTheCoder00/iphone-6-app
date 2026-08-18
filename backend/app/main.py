@@ -810,6 +810,10 @@ async def events(request: Request):
                 except asyncio.TimeoutError:
                     yield KEEPALIVE_TICK
                     continue
+                # Delivery bookkeeping: the event left this client's queue, so
+                # the reminder reached at least one consumer and must never be
+                # re-armed by the unsubscribe drain.
+                event_hub.ack(queue, event)
                 yield sse_event(event)
         except asyncio.CancelledError:
             raise

@@ -225,6 +225,27 @@ class Store:
             )
             conn.commit()
 
+    def rearm_if_undelivered(self, reminder_id: int) -> bool:
+        """Re-arm a claimed row whose SSE event died in a discarded queue.
+
+        Unlike unmark_fired, this also guards on delivered = 0. Delivery of
+        the same row can be racing this re-arm (the publisher's
+        mark_delivered runs on another thread), and the two updates are
+        mutually exclusive on the shared flags: either this wins (fired = 0,
+        so mark_delivered becomes a no-op) or mark_delivered wins (delivered
+        = 1, so this becomes a no-op) — never both, so the reminder can
+        neither be lost nor double-fired.
+        """
+        conn = self._require()
+        with self._lock:
+            cur = conn.execute(
+                "UPDATE reminders SET fired = 0, fire_time = ?"
+                " WHERE id = ? AND fired = 1 AND delivered = 0",
+                (time.time(), reminder_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
     def stale_claimed(self, grace_seconds: float = 60.0) -> list[dict]:
         """Reminders claimed but never delivered, older than the grace period.
 

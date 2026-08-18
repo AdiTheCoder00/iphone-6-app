@@ -20,7 +20,14 @@ def unrecognized_env_keys() -> list[str]:
     known = {f.validation_alias for f in Settings.model_fields.values()
              if isinstance(f.validation_alias, str)}
     found = []
-    for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = _ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError:
+        # A stray non-UTF-8 byte (a pasted value, a foreign codepage) must
+        # not take the whole server down at boot — the env file still parses
+        # for pydantic, which reads it more leniently.
+        return []
+    for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
