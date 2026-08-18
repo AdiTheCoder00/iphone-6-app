@@ -411,29 +411,58 @@ html, body {
   /* A flex child of .face-root: while a reply is up, the face re-centres in
      the space above and this bubble owns the gap below the mouth, so a
      full-length reply can never cover the eyes. margin-top:auto absorbs the
-     free space above (the face hugs the top); margin-bottom:62px clears the
-     status band, which owns the top 54px above the sheet. At the old
+     free space above (the face hugs the top); margin-bottom:28px clears the
+     status band (the 62px design clearance minus the face-root's own 34px of
+     bottom padding). At the old
      bottom:172/max-height:132 a 220-character reply was clipped AND
      auto-dismissed — text you cannot finish reading before it disappears.
-     The model targets ~200 chars but overshoots. */
-  margin: auto 24px 62px;
+     The model targets ~200 chars but overshoots.
+     Hidden, the bubble must take NO flex space (an empty 28px bubble with an
+     auto top margin would pin the face to the top edge even in idle), and
+     display:none would kill the fade-in — the iPhone 6's iOS 12 Safari
+     cannot transition display. So the hidden state collapses the box with
+     animatable properties instead: max-height 0, no bottom margin, no
+     padding, no border, overflow hidden. Showing animates them back, and the
+     fade/slide run as before. margin-top:auto <-> 0 cannot interpolate, so
+     the face snaps up when a reply lands — that snap is the signal the
+     glance fades too. */
+  margin: 0 24px;
   align-self: stretch;
-  padding: 13px 16px;
+  max-height: 0;
+  padding: 0 16px;
+  border-width: 0;
+  overflow-y: auto;
   border-radius: 18px;
   background: rgba(22, 30, 36, 0.92);
-  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-style: solid;
+  border-color: rgba(var(--accent-rgb), 0.22);
   color: #dfe9ee;
   font-size: 15px;
   line-height: 1.42;
   text-align: center;
-  max-height: 186px;
-  overflow-y: auto;
   opacity: 0;
   transform: translateY(8px);
-  transition: opacity 280ms cubic-bezier(0.4,0,0.2,1), transform 280ms cubic-bezier(0.4,0,0.2,1);
+  transition:
+    opacity 280ms cubic-bezier(0.4,0,0.2,1),
+    transform 280ms cubic-bezier(0.4,0,0.2,1),
+    max-height 280ms cubic-bezier(0.4,0,0.2,1),
+    margin-bottom 280ms cubic-bezier(0.4,0,0.2,1),
+    padding-top 280ms cubic-bezier(0.4,0,0.2,1),
+    padding-bottom 280ms cubic-bezier(0.4,0,0.2,1),
+    border-width 280ms cubic-bezier(0.4,0,0.2,1);
   pointer-events: none;
 }
-.bubble[data-visible="true"] { opacity: 1; transform: translateY(0); }
+.bubble[data-visible="true"] {
+  max-height: 150px;
+  /* 62px of clearance below the mouth-line minus the 34px the face-root's
+     own padding-bottom adds (see .face-root in section 5): the bubble bottom
+     still lands 8px above the status band, as before the sheet was built. */
+  margin: auto 24px 28px;
+  padding: 13px 16px;
+  border-width: 1px;
+  opacity: 1;
+  transform: translateY(0);
+}
 .bubble[data-error="true"] { border-color: rgba(224, 122, 122, 0.35); color: #e6c7c7; }
 .bubble[data-actions="true"] { pointer-events: auto; }
 .bubble__actions {
@@ -483,7 +512,9 @@ html, body {
   right: 24px;
   bottom: calc(var(--deck-h) + 62px);
   z-index: 3;
+  margin: 0;
   padding: 10px;
+  border-width: 1px;
   max-height: none;
 }
 .bubble__image {
@@ -1044,8 +1075,9 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
    nudge goes with it: with the sheet occupying the lower half there is no
    longer a tall empty space below the face to compensate for. padding-top is
    back in so the chat bubble, a flex child, can own the bottom of the content
-   box (margin-bottom: 62px -> bubble bottom at y307) while the face anchors
-   34px below the top edge instead of flushing against it. Content box =
+   box (its margin-bottom:28px plus the 34px here -> bubble bottom at y307,
+   8px above the status band) while the face anchors 34px below the top edge
+   instead of flushing against it. Content box =
    667 - 34 - (298 + 34) = 301px -> the idle face still centres at y127,
    exactly where it sat before the bubble became a flex child. */
 .face-root { padding-top: 34px; padding-bottom: calc(var(--deck-h) + 34px); }
@@ -1191,13 +1223,6 @@ body[data-standalone="true"] .dock[data-revealed="true"] { opacity: 1; pointer-e
 /* Tools only appear once you are actually typing. */
 .composer__tools { display: none; }
 .composer[data-typing="true"] .composer__tools { display: flex; }
-
-/* The bubble clears the sheet AND the status band (which owns the top 54px
-   above the sheet): with the old deck-h+14 the bubble's bottom sat behind
-   the band whenever the DND chip row was up. The position itself comes from
-   the flex rule in section 4 — margin-top:auto + margin-bottom:62px inside
-   .face-root, whose padding-bottom already ends at the sheet. */
-.bubble { max-height: 150px; }
 
 /* Backend down: the error strip wins over a stale bubble — yesterday's reply
    next to "can't reach the backend" reads as if the reply were live. The
